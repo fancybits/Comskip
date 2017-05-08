@@ -1,3 +1,4 @@
+//
 // comskip.c
 // Copyright (C) 2004 Scott Michael
 // Based on the work of Chris Pinkham of MythTV
@@ -101,6 +102,8 @@ FILE*			tuning_file = NULL;
 FILE*			training_file = NULL;
 FILE*			aspect_file = NULL;
 FILE*			cutscene_file = NULL;
+FILE*			mkvtoolnix_chapters_file = NULL;
+FILE*			mkvtoolnix_tags_file = NULL;
 extern int		demux_pid;
 extern int		selected_audio_pid;
 extern int		selected_subtitle_pid;
@@ -109,6 +112,8 @@ extern int		demux_asf;
 
 extern int key;
 extern char osname[];
+
+int audio_channels;
 
 #define KDOWN	1
 #define KUP		2
@@ -155,6 +160,7 @@ typedef struct
     double logo_filter;
     int    xds;
     int cur_segment;
+    int audio_channels;
 #ifdef FRAME_WITH_HISTOGRAM
     int		histogram[256];
 #endif
@@ -224,6 +230,7 @@ typedef struct block_info
     int				cc_type;
 //	bool			ar;
     double			ar_ratio;
+    int			audio_channels;
     int				cause;
     int				more;
     int				less;
@@ -369,12 +376,26 @@ typedef struct
 ar_block_info*			ar_block = NULL;
 long					ar_block_count = 0;				// How many groups have already been identified. Increment after fill.
 long					max_ar_block_count;
+int 	last_audio_channels = 2;
 double	last_ar_ratio = 0.0;
 double  ar_ratio_trend = 0.0;
 int		ar_ratio_trend_counter = 0;
 int		ar_ratio_start	= 0;
 int		ar_misratio_trend_counter = 0;
 int		ar_misratio_start	= 0;
+
+#define AC_UNDEF	0
+typedef struct
+{
+    int		start;
+    int		end;
+//	bool	ar;
+    int 	audio_channels;
+} ac_block_info;
+
+ac_block_info*			ac_block = NULL;
+long					ac_block_count = 0;				// How many groups have already been identified. Increment after fill.
+long					max_ac_block_count;
 
 
 typedef struct
@@ -412,6 +433,14 @@ struct
     double	ar_ratio;
 } ar_histogram[MAX_ASPECT_RATIOS];
 double	dominant_ar;
+
+#define MAX_AUDIO_CHANNELS	12
+struct
+{
+    long	frames;
+    int     audio_channels;
+} ac_histogram[MAX_AUDIO_CHANNELS];
+int	dominant_ac;
 
 int                     thread_count = 2;
 int                     hardware_decode = 0;
@@ -501,6 +530,8 @@ double              avg_fps = 22;
 int					border = 10;						// border around edge of video to ignore
 int					ticker_tape=0, ticker_tape_percentage=0;						// border from bottom to ignore
 int					ignore_side=0;
+int					ignore_left_side=0;
+int					ignore_right_side=0;
 int					max_brightness = 60;				// frame not black if any pixels checked are greater than this (scale 0 to 255)
 int					maxbright = 1;
 int					min_hasBright = 255000;
@@ -555,6 +586,7 @@ int					commDetectMethod = BLACK_FRAME + LOGO + RESOLUTION_CHANGE +  AR + SILENC
 int					giveUpOnLogoSearch = 2000;			// If no logo is identified after x seconds into the show - give up.
 int					delay_logo_search = 0;			// If no logo is identified after x seconds into the show - give up.
 int				cut_on_ar_change = 1;
+int				cut_on_ac_change = 1;
 int					added_recording = 14;
 int					after_start = 0;
 int					before_end = 0;
@@ -612,6 +644,7 @@ bool				output_vdr = false;
 bool				output_vcf = false;
 bool				output_projectx = false;
 bool				output_avisynth = false;
+int 				output_mkvtoolnix = 0;
 bool				output_debugwindow = false;
 bool				output_console = true;
 int					disable_heuristics = 0;
@@ -652,6 +685,7 @@ double				cc_commercial_type_modifier = 4.0;
 double				cc_wrong_type_modifier = 2.0;
 double				cc_correct_type_modifier = 0.75;
 double				ar_wrong_modifier = 2.0;
+double				ac_wrong_modifier = 1.0;
 double				ar_rounding = 100;
 double				ar_delta = 0.08;
 long				avg_brightness = 0;
@@ -917,6 +951,7 @@ void				InitializeBlackArray(long i);
 void				InitializeSchangeArray(long i);
 void				InitializeLogoBlockArray(long i);
 void				InitializeARBlockArray(long i);
+void				InitializeACBlockArray(long i);
 void				InitializeBlockArray(long i);
 void				InitializeCCBlockArray(long i);
 void				InitializeCCTextArray(long i);
@@ -1250,7 +1285,7 @@ bool BuildBlocks(bool recalc)
     }
 
     j = 0;
-    for (i = 2; i < frame_count - 1; i++)  // frame 0 is not use????
+    for (i = 2; i < frame_count - 1; i++)  // frame 0 is not used
         if (frame[i-1].volume != -1 && frame[i].volume == -1 && frame[i+1].volume != -1)
             j++;
     if (j>0)
@@ -1468,6 +1503,15 @@ bool BuildBlocks(bool recalc)
         }
     }
 
+    if ( cut_on_ac_change )
+    {
+        for (i = 0; i < ac_block_count; i++)
+        {
+            a = ac_block[i].end;
+            InsertBlackFrame(a,frame[a].brightness,frame[a].uniform,frame[a].volume, C_r);
+        }
+    }
+
 
     if (ValidateBlackFrames(C_b, 3.0, false) < 1 / 3.0)
         Debug(8, "Black Frame cutting too low\n");
@@ -1478,7 +1522,7 @@ bool BuildBlocks(bool recalc)
     //	ValidateBlackFrames(C_c, 3.0, true);
 
     if (validate_uniform)
-        ValidateBlackFrames(C_u, 3.0, true);
+        ValidateBlackFrames(C_u, ((logoPercentage < logo_fraction || logoPercentage > logo_percentile) ? 1.2 : 3.0), true);
 
 
     if (commDetectMethod & SILENCE)
@@ -2205,7 +2249,7 @@ void OutputDebugWindow(bool showVideo, int frm, int grf)
 #define PLOTS	9
 
                     PLOT(PLOTS, 0, x, cblock[bl].brightness, 2550, (int)(avg_brightness*punish_threshold), 0, 255, 0); // RED
-                    PLOT(PLOTS, 1, x, cblock[bl].volume/100, 100000, (int)(avg_volume*punish_threshold)/100, 255, 0, 0); // RED
+                    PLOT(PLOTS, 1, x, cblock[bl].volume/100, 100000, (int)(avg_volume*punish_threshold)/100, 255, 0, 0); // Green
                     PLOT(PLOTS, 2, x, cblock[bl].uniform, 3000, (int)(avg_uniform*punish_threshold), 255, 0,0); // RED
                     PLOT(PLOTS, 3, x, (int)(cblock[bl].schange_rate*1000), 1000, (int)(avg_schange*punish_threshold*1000), 255, 0, 0);	// PURPLE
                 }
@@ -2216,7 +2260,7 @@ void OutputDebugWindow(bool showVideo, int frm, int grf)
                         b += frame[i].brightness;
                         PLOT(PLOTS, 0, x, frame[i].brightness, 255, max_avg_brightness, 255, 0,0); // RED
                         s += frame[i].volume;
-                        PLOT(PLOTS, 1, x, frame[i].volume, 10000, max_volume, 0, 255, 0);			// GREEN
+                        PLOT(PLOTS, 1, x, frame[i].volume, 10000, max_volume, (frame[i].audio_channels * 40), 255, 0);			// GREEN
                         e += frame[i].uniform;
                         PLOT(PLOTS, 2, x, frame[i].uniform, 30000, non_uniformity, 0, 255, 255);	// LIGHT BLUE
                         c += (int)(frame[i].currentGoodEdge*100);
@@ -3126,6 +3170,7 @@ int DetectCommercials(int f, double pts)
         frame[frame_count].goppos = headerpos;
 
         frame[frame_count].cur_segment = debug_cur_segment;
+        frame[frame_count].audio_channels = audio_channels;
 
     }
     if (curvolume > 0)
@@ -3145,6 +3190,26 @@ int DetectCommercials(int f, double pts)
             for (j = 0; j < ignore_side; j++)
             {
                 frame_ptr[width*i + j] = 0;
+                frame_ptr[width*i + (width -1) - j] = 0;
+            }
+        }
+    }
+    if (ignore_left_side)
+    {
+        for (i = 0; i < height; i++)
+        {
+            for (j = 0; j < ignore_left_side; j++)
+            {
+                frame_ptr[width*i + j] = 0;
+            }
+        }
+    }
+    if (ignore_right_side)
+    {
+        for (i = 0; i < height; i++)
+        {
+            for (j = 0; j < ignore_right_side; j++)
+            {
                 frame_ptr[width*i + (width -1) - j] = 0;
             }
         }
@@ -3287,6 +3352,29 @@ double AverageARForBlock(int start, int end)
     return(Ar);
 }
 
+int AverageACForBlock(int start, int end)
+{
+    int i, maxSize;
+    int Ac;
+    int f,t;
+
+    maxSize = 0;
+    Ac = 0;
+    for (i = 0; i < ac_block_count; i++)
+    {
+        f = max(ac_block[i].start, start);
+        t = min(ac_block[i].end, end);
+        if (maxSize < t-f+1)
+        {
+            Ac = ac_block[i].audio_channels;
+            maxSize = t-f+1;
+        }
+        if (ac_block[i].start > end)
+            break;
+    }
+    return(Ac);
+}
+
 double	FindARFromHistogram(double ar_ratio)
 {
     int i;
@@ -3309,12 +3397,6 @@ double	FindARFromHistogram(double ar_ratio)
             return (ar_histogram[i].ar_ratio);
     }
     return (0.0);
-
-
-
-
-
-
 }
 
 void FillARHistogram(bool refill)
@@ -3384,6 +3466,77 @@ void FillARHistogram(bool refill)
     }
 
 }
+
+
+void FillACHistogram(bool refill)
+{
+    int		i;
+    bool	hadToSwap;
+    long	tempFrames;
+    int	    tempAC;
+    long	totalFrames = 0;
+    long	tempCount;
+    long	counter;
+    int		hi;
+
+    if (refill)
+    {
+
+        for (i = 0; i < MAX_AUDIO_CHANNELS; i++)
+        {
+            ac_histogram[i].frames = 0;
+            ac_histogram[i].audio_channels = 0.0;
+        }
+
+        for (i = 0; i < ac_block_count; i++)
+        {
+            hi = ac_block[i].audio_channels;
+            if (hi >= 0 && hi < MAX_AUDIO_CHANNELS)
+            {
+                ac_histogram[hi].frames += ac_block[i].end - ac_block[i].start + 1;
+                ac_histogram[hi].audio_channels = ac_block[i].audio_channels;
+            }
+        }
+    }
+
+    counter = 0;
+    do
+    {
+        hadToSwap = false;
+        counter++;
+        for (i = 0; i < MAX_AUDIO_CHANNELS - 1; i++)
+        {
+            if (ac_histogram[i].frames < ac_histogram[i + 1].frames)
+            {
+                hadToSwap = true;
+                tempFrames = ac_histogram[i].frames;
+                tempAC  = ac_histogram[i].audio_channels;
+                ac_histogram[i] = ac_histogram[i + 1];
+                ac_histogram[i+1].frames = tempFrames;
+                ac_histogram[i+1].audio_channels = tempAC;
+            }
+        }
+    }
+    while (hadToSwap);
+
+    for (i = 0; i < MAX_AUDIO_CHANNELS; i++)
+    {
+        totalFrames += ac_histogram[i].frames;
+    }
+
+    tempCount = 0;
+    Debug(10, "\n\nAfter Sorting - %i\n--------------\n", counter);
+    i = 0;
+    while (i < MAX_AUDIO_CHANNELS && ac_histogram[i].frames > 0)
+    {
+        tempCount += ac_histogram[i].frames;
+        Debug(10, "Audio channels %3i found on %6i frames totalling \t%3.1f%c\n", ac_histogram[i].audio_channels, ac_histogram[i].frames, ((double)tempCount / (double)totalFrames)*100,'%');
+        i++;
+    }
+
+}
+
+
 
 
 void InsertBlackFrame(int f, int b, int u, int v, int c)
@@ -3806,6 +3959,8 @@ scanagain:
 //							rsc = frame[j].schange_percent;
                         j++;
                     }
+                    if (j == t )
+                        break;
                     c = 10;
                     j = j - 10;
                     if (j < 1)
@@ -3823,6 +3978,8 @@ scanagain:
                         }
                         j++;
                     }
+                    if (j == t )
+                        break;
                     while (frame[j].volume < max_volume && j < t)
                     {
                         if (rsc > frame[j].schange_percent)
@@ -3832,6 +3989,8 @@ scanagain:
                         }
                         j++;
                     }
+                    if (j == t )
+                        break;
                     c = 10;
                     while (c-- && j < t)
                     {
@@ -3842,11 +4001,14 @@ scanagain:
                         }
                         j++;
                     }
+                    if (j == t )
+                        break;
                     if (maxsc > rsc)
                     {
                         maxsc = rsc;
                         cp = cpf;
                     }
+                    j = t; // Only search once
 //					cp = j;
 //					j=t;
                 }
@@ -3895,12 +4057,14 @@ scanagain:
                 while (j > t)
                 {
                     rsc = 255;
-                    while (frame[j].volume >= max_volume && j > t)
+                    while (frame[j].volume >= max_volume && j > t) // Search low volume
                     {
 //						if (rsc > frame[j].schange_percent)
 //							rsc = frame[j].schange_percent;
                         j--;
                     }
+                    if (j == t )
+                        break;
                     c = 10;
                     j = j + 10;
                     if (j >= frame_count)
@@ -3909,7 +4073,7 @@ scanagain:
                         c = c - j;
                         j = frame_count - 1;
                     }
-                    while (c-- && j > t)
+                    while (c-- && j > t) // Largest scene change 10 frames before low volume
                     {
                         if (rsc > frame[j].schange_percent)
                         {
@@ -3918,8 +4082,10 @@ scanagain:
                         }
                         j--;
                     }
+                    if (j == t )
+                        break;
 
-                    while (frame[j].volume < max_volume && j > t)
+                    while (frame[j].volume < max_volume && j > t) // largest scene change in low volume
                     {
                         if (rsc > frame[j].schange_percent)
                         {
@@ -3928,8 +4094,10 @@ scanagain:
                         }
                         j--;
                     }
+                    if (j == t )
+                        break;
                     c = 10;
-                    while (c-- && j > t)
+                    while (c-- && j > t) //Largest scene change after low volume
                     {
                         if (rsc > frame[j].schange_percent)
                         {
@@ -3938,11 +4106,14 @@ scanagain:
                         }
                         j--;
                     }
+                    if (j == t )
+                        break;
                     if (maxsc > rsc)
                     {
                         maxsc = rsc;
                         cp = cpf;
                     }
+                    j = t; // Only search once
 //					cp = j;
 //					j=t;
                 }
@@ -3951,8 +4122,8 @@ scanagain:
                     InsertBlackFrame(cp,frame[cp].brightness,frame[cp].uniform,frame[cp].volume, C_l);
                     Debug(
                         3,
-                        "Frame %6i (%.3fs) - Cutpoint added %i seconds before Logo disappears at change percentage of %d\n",
-                        cp, get_frame_pts(cp), (int)F2L(cp, logo_block[i].end), maxsc
+                        "Frame %6i (%.3fs) - Cutpoint added %i seconds before Logo appears at change percentage of %d\n",
+                        cp, get_frame_pts(cp), (int)F2L(logo_block[i].start, cp), maxsc
                     );
                 }
             }
@@ -3996,6 +4167,10 @@ scanagain:
         very_low_volume_count = 0;
         for (i=1; i <frame_count; i++)
         {
+            if (frame[i].volume < 6)
+            {
+                InsertBlackFrame(i,frame[i].brightness,frame[i].uniform,frame[i].volume, C_v);
+            } else
             if (min_silence > 0)
             {
                 if (0 <= frame[i].volume && frame[i].volume < max_silence)
@@ -4093,6 +4268,34 @@ scanagain:
     frame[frame_count].dimCount = 0;
     frame[frame_count].hasBright = 0;
     InsertBlackFrame(frame_count,0,0,0, C_b);
+
+    if (cut_on_ac_change)
+    {
+        if (ac_block[ac_block_count].start > 0)
+        {
+            Debug(5, "The last ar cblock wasn't closed.  Now closing.\n");
+            ac_block[ac_block_count].end = frame_count;
+            ac_block_count++;
+        }
+
+        FillACHistogram(true);
+        dominant_ac = ac_histogram[0].audio_channels;
+
+        // Print out ar cblock list
+        Debug(4, "\nPrinting AC cblock list\n-----------------------------------------\n");
+        for (i = 0; i < ac_block_count; i++)
+        {
+            Debug(
+                4,
+                "Block: %i\tStart: %6i\tEnd: %6i\taudio channels: %2i\tLength: %s\n",
+                i,
+                ac_block[i].start,
+                ac_block[i].end,
+                ac_block[i].audio_channels,
+                dblSecondsToStrMinutes(F2L(ac_block[i].end, ac_block[i].start) )
+            );
+        }
+    }
 
     // close out the last ar cblock
     if (commDetectMethod & AR)
@@ -4293,7 +4496,7 @@ again:
                     cc_text[j].start_frame = cc_text[j + 1].start_frame;
                     cc_text[j].end_frame = cc_text[j + 1].end_frame;
                     cc_text[j].text_len = cc_text[j + 1].text_len;
-                    strcpy((char*)cc_text[j].text, (char*)cc_text[j + 1].text);
+                    strncpy((char*)cc_text[j].text, (char*)cc_text[j + 1].text, cc_text[j + 1].text_len);
                 }
 
                 cc_text_count--;
@@ -5136,7 +5339,7 @@ void WeighBlocks(void)
         */
         // Mod score based on CC type
         if (processCC)
-    {
+        {
         if (most_cc_type == NONE)
             {
                 if (cblock[i].cc_type != NONE)
@@ -5196,7 +5399,20 @@ void WeighBlocks(void)
             cblock[i].cause |= C_AR;
             cblock[i].more |= C_AR;
         }
-//		}
+        //		}
+
+                cblock[i].audio_channels = AverageACForBlock(cblock[i].f_start, cblock[i].f_end);
+        if (dominant_ac != cblock[i].audio_channels)
+        {
+            Debug(2, "Block %i audio_channels (%i) is different from dominant audio_channels (%i).\n",i,cblock[i].audio_channels, dominant_ac);
+            Debug(3, "Block %i score:\tBefore - %.2f\t", i, cblock[i].score);
+            cblock[i].score *= ac_wrong_modifier;
+            Debug(3, "After - %.2f\n", cblock[i].score);
+            cblock[i].cause |= C_AR;
+            cblock[i].more |= C_AR;
+        }
+
+
     }
 
     if (processCC)
@@ -6344,6 +6560,117 @@ void OpenOutputFiles()
             exit(6);
         }
     }
+		if (output_mkvtoolnix>0)
+	{
+		/*
+		<?xml version="1.0" encoding="ISO-8859-1"?>
+		<Chapters>
+			<EditionEntry>
+				<ChapterAtom>
+					<ChapterDisplay>
+						<ChapterString>Comercial</ChapterString>
+					</ChapterDisplay>
+					<ChapterTimeStart>00:00:00</ChapterTimeStart>
+					<ChapterTimeEnd>0:05:15.470000</ChapterTimeEnd>
+				</ChapterAtom>
+				<ChapterAtom>
+					<ChapterDisplay>
+						<ChapterString>Show</ChapterString>
+					</ChapterDisplay>
+					<ChapterTimeStart>0:05:15.470000</ChapterTimeStart>
+					<ChapterTimeEnd>0:29:39.280000</ChapterTimeEnd>
+				</ChapterAtom>
+			</EditionEntry>
+		</Chapters>
+		*/
+		sprintf(filename, "%s.mkvtoolnix.chapters", outbasename);
+		mkvtoolnix_chapters_file = myfopen(filename, "wb");
+		if (!mkvtoolnix_chapters_file)
+		{
+			fprintf(stderr, "%s - could not create file %s\n", strerror(errno), filename);
+			exit(6);
+		}
+		else
+		{
+			fprintf(mkvtoolnix_chapters_file, "<?xml version=\"1.0\" encoding=\"ISO - 8859 - 1\"?>\n<Chapters>\n");
+		}
+	}
+	if (output_mkvtoolnix==2)
+	{
+		/*
+		<?xml version="1.0" encoding="ISO-8859-1"?>
+		<Chapters>
+			<EditionEntry>
+				<EditionUID>1</EditionUID>
+				<ChapterAtom>
+					<ChapterDisplay>
+						<ChapterString>Comercial</ChapterString>
+					</ChapterDisplay>
+					<ChapterTimeStart>00:00:00</ChapterTimeStart>
+					<ChapterTimeEnd>0:05:15.470000</ChapterTimeEnd>
+				</ChapterAtom>
+				<ChapterAtom>
+					<ChapterDisplay>
+						<ChapterString>Show</ChapterString>
+					</ChapterDisplay>
+					<ChapterTimeStart>0:05:15.470000</ChapterTimeStart>
+					<ChapterTimeEnd>0:29:39.280000</ChapterTimeEnd>
+				</ChapterAtom>
+			</EditionEntry>
+			<EditionEntry>
+				<EditionFlagOrdered>1</EditionFlagOrdered>
+				<EditionUID>2</EditionUID>
+				<ChapterAtom>
+					<ChapterDisplay>
+						<ChapterString>Show</ChapterString>
+					</ChapterDisplay>
+					<ChapterFlagEnabled>1</ChapterFlagEnabled>
+					<ChapterTimeStart>0:05:15.470000</ChapterTimeStart>
+					<ChapterTimeEnd>0:29:39.280000</ChapterTimeEnd>
+				</ChapterAtom>
+			</EditionEntry>
+		</Chapters>
+		*/
+		sprintf(filename, "%s.mkvtoolnix.tags", outbasename);
+		mkvtoolnix_tags_file = myfopen(filename, "wb");
+		if (!mkvtoolnix_tags_file)
+		{
+			fprintf(stderr, "%s - could not create file %s\n", strerror(errno), filename);
+			exit(6);
+		}
+		else
+		{
+			fprintf(mkvtoolnix_tags_file, "<?xml version=\"1.0\" encoding=\"ISO - 8859 - 1\"?>\n"\
+				"<Tags>\n"
+				"\t<Tag>\n"\
+				"\t\t<Targets>\n"\
+				"\t\t\t<TargetTypeValue>50</TargetTypeValue>\n"\
+				"\t\t\t<EditionUID>1</EditionUID>\n"\
+				"\t\t</Targets>\n"\
+				"\t\t<Simple>\n"\
+				"\t\t\t<TagLanguage>eng</TagLanguage>\n"\
+				"\t\t\t<Name>TITLE</Name>\n"\
+				"\t\t\t<DefaultLanguage>1</DefaultLanguage>\n"\
+				"\t\t\t<String>With Commercials</String>\n"\
+				"\t\t</Simple>\n"\
+				"\t</Tag>\n"\
+				"\t<Tag>\n"\
+				"\t\t<Targets>\n"\
+				"\t\t\t<TargetTypeValue>50</TargetTypeValue>\n"\
+				"\t\t\t<EditionUID>2</EditionUID>\n"\
+				"\t\t</Targets>\n"\
+				"\t\t<Simple>\n"\
+				"\t\t\t<TagLanguage>eng</TagLanguage>\n"\
+				"\t\t\t<Name>TITLE</Name>\n"\
+				"\t\t\t<DefaultLanguage>1</DefaultLanguage>\n"\
+				"\t\t\t<String>Without Commercials</String>\n"\
+				"\t\t</Simple>\n"\
+				"\t</Tag>\n"\
+				"</Tags>"
+			);
+			fclose(mkvtoolnix_tags_file);
+		}
+	}
 }
 
 #define CLOSEOUTFILE(F) { if ((F) && last) fclose(F); }
@@ -7282,6 +7609,63 @@ bool OutputBlocks(void)
         }
     }
 
+	if (mkvtoolnix_chapters_file)
+	{
+		double currentStart = 0;
+		char startTimespan[15];
+		char endTimespan[15];
+
+		if(output_mkvtoolnix > 0){
+			fprintf(mkvtoolnix_chapters_file,"\t<EditionEntry>\n\t\t<EditionUID>1</EditionUID>\n");
+			for (i = 0; i < block_count; i++)
+            {
+				if(i == 0 || (cblock[i-1].iscommercial != cblock[i].iscommercial)){
+						currentStart = cblock[i].f_start;
+				}
+				if(i == i-1 || (cblock[i+1].iscommercial != cblock[i].iscommercial)){
+					strcpy(startTimespan, dblSecondsToStrMinutes(get_frame_pts(currentStart)));
+					fprintf(mkvtoolnix_chapters_file,
+						"\t\t<ChapterAtom>\n"\
+						"\t\t\t<ChapterDisplay>\n"\
+						"\t\t\t\t<ChapterString>%s</ChapterString>\n"\
+						"\t\t\t</ChapterDisplay>\n"\
+						"\t\t\t<ChapterTimeStart>%s</ChapterTimeStart>\n"\
+						"\t\t</ChapterAtom>\n"
+					, cblock[i].iscommercial ? "Commercial" : "Show", startTimespan);
+				}
+            }
+			fprintf(mkvtoolnix_chapters_file,"\t</EditionEntry>\n");
+		}
+		if(output_mkvtoolnix == 2){
+			fprintf(mkvtoolnix_chapters_file,"\t<EditionEntry>\n\t\t<EditionUID>2</EditionUID>\n\t\t<EditionFlagOrdered>1</EditionFlagOrdered>\n");
+			for (i = 0; i < block_count; i++)
+            {
+				if(!cblock[i].iscommercial){
+					if(i == 0 || cblock[i-1].iscommercial){
+						currentStart = cblock[i].f_start;
+					}
+					if(i == i-1 || cblock[i+1].iscommercial){
+						strcpy(startTimespan, dblSecondsToStrMinutes(get_frame_pts(currentStart)));
+						strcpy(endTimespan, dblSecondsToStrMinutes(get_frame_pts(cblock[i].f_end)));
+						fprintf(mkvtoolnix_chapters_file,
+							"\t\t<ChapterAtom>\n"\
+							"\t\t\t<ChapterDisplay>\n"\
+							"\t\t\t\t<ChapterString>Show</ChapterString>\n"\
+							"\t\t\t</ChapterDisplay>\n"\
+							"\t\t\t<ChapterFlagEnabled>1</ChapterFlagEnabled>\n"\
+							"\t\t\t<ChapterTimeStart>%s</ChapterTimeStart>\n"\
+							"\t\t\t<ChapterTimeEnd>%s</ChapterTimeEnd>\n"\
+							"\t\t</ChapterAtom>\n"
+						, startTimespan,endTimespan);
+					}
+				}
+            }
+			fprintf(mkvtoolnix_chapters_file,"\t</EditionEntry>\n");
+		}
+		fprintf(mkvtoolnix_chapters_file,"</Chapters>");
+		fclose(mkvtoolnix_chapters_file);
+	}
+
     if (reffer_count == -1) {
         reffer_count = commercial_count;
         for (i = 0; i <= commercial_count; i++)
@@ -7850,6 +8234,9 @@ char * FindString(char* str1, char* str2, char *v)
 //			strcat(ini_text, tmp);
 //			return(foundText);
         }
+        else
+            Debug(1, "String parameter for %s must be enclosed in double quotes\n", str2);
+
     }
     else
         return(0);
@@ -7993,6 +8380,7 @@ void LoadIniFile()
         if ((tmp = FindNumber(data, "validate_scenechange=", (double) validate_scenechange)) > -1) validate_scenechange = (int)tmp;
         if ((tmp = FindNumber(data, "global_threshold=", (double) global_threshold)) > -1) global_threshold = (double)tmp;
         if ((tmp = FindNumber(data, "disable_heuristics=", (double) disable_heuristics)) > -1) disable_heuristics = (int)tmp;
+        if ((tmp = FindNumber(data, "cut_on_ac_change=", (double) cut_on_ac_change)) > -1) cut_on_ac_change = (int)tmp;
         AddIniString("[CPU Load Reduction]\n");
         if ((tmp = FindNumber(data, "thread_count=", (double) thread_count)) > -1) thread_count = (int)tmp;
         if (!hardware_decode)
@@ -8044,6 +8432,7 @@ void LoadIniFile()
         if ((tmp = FindNumber(data, "combined_length_strict_modifier=", (double) combined_length_strict_modifier)) > -1) combined_length_strict_modifier = (double)tmp;
         if ((tmp = FindNumber(data, "combined_length_nonstrict_modifier=", (double) combined_length_nonstrict_modifier)) > -1) combined_length_nonstrict_modifier = (double)tmp;
         if ((tmp = FindNumber(data, "ar_wrong_modifier=", (double) ar_wrong_modifier)) > -1) ar_wrong_modifier = (double)tmp;
+        if ((tmp = FindNumber(data, "ac_wrong_modifier=", (double) ac_wrong_modifier)) > -1) ac_wrong_modifier = (double)tmp;
         if ((tmp = FindNumber(data, "excessive_length_modifier=", (double) excessive_length_modifier)) > -1) excessive_length_modifier = (double)tmp;
         if ((tmp = FindNumber(data, "dark_block_modifier=", (double) dark_block_modifier)) > -1) dark_block_modifier = (double)tmp;
         if ((tmp = FindNumber(data, "min_schange_modifier=", (double) min_schange_modifier)) > -1) min_schange_modifier = (double)tmp;
@@ -8065,6 +8454,8 @@ void LoadIniFile()
         if ((tmp = FindNumber(data, "ticker_tape=", (double) ticker_tape)) > -1) ticker_tape = (int)tmp;
         if ((tmp = FindNumber(data, "ticker_tape_percentage=", (double) ticker_tape_percentage)) > -1) ticker_tape_percentage = (int)tmp;
         if ((tmp = FindNumber(data, "ignore_side=", (double) ignore_side)) > -1) ignore_side = (int)tmp;
+        if ((tmp = FindNumber(data, "ignore_left_side=", (double) ignore_left_side)) > -1) ignore_left_side = (int)tmp;
+        if ((tmp = FindNumber(data, "ignore_right_side=", (double) ignore_right_side)) > -1) ignore_right_side = (int)tmp;
         if ((tmp = FindNumber(data, "subtitles=", (double) subtitles)) > -1) subtitles = (int)tmp;
         if ((tmp = FindNumber(data, "logo_at_bottom=", (double) logo_at_bottom)) > -1) logo_at_bottom = (int)tmp;
         if ((tmp = FindNumber(data, "logo_threshold=", (double) logo_threshold)) > -1) logo_threshold = (double)tmp;
@@ -8159,6 +8550,7 @@ void LoadIniFile()
         if ((tmp = FindNumber(data, "output_ffmeta=", (double) output_ffmeta)) > -1) output_ffmeta = (bool) tmp;
         if ((tmp = FindNumber(data, "output_ffsplit=", (double) output_ffsplit)) > -1) output_ffsplit = (bool) tmp;
         if ((tmp = FindNumber(data, "delete_logo_file=", (double) deleteLogoFile)) > -1) deleteLogoFile = (int)tmp;
+        if ((tmp = FindNumber(data, "output_mkvtoolnix=", (double) output_mkvtoolnix)) > -1) output_mkvtoolnix = (int) tmp;
 
         if ((tmp = FindNumber(data, "cutscene_frame=", (double) cutsceneno)) > -1) cutsceneno = (int)tmp;
         if ((ts = FindString(data, "cutscene_dumpfile=", "")) != 0) strcpy(cutscenefile,ts);
@@ -8976,7 +9368,7 @@ FILE* LoadSettings(int argc, char ** argv)
         else
         {
             CEW_argv[i++] = "-srt";
-            sprintf(filename, "%s.smi", outbasename);
+            sprintf(filename, "%s.srt", outbasename);
         }
         CEW_argv[i++] = (char *)in->filename[0];
         CEW_argv[i++] = "-o";
@@ -9408,10 +9800,31 @@ void ProcessARInfo(int minY, int maxY, int minX, int maxX)
     }
 //	}
 
-
-//	if (framearray) frame[frame_count].ar_ratio = last_ar_ratio;
 }
 
+void ProcessACInfoInit(int audio_channels)
+{
+//    audio_channels_start = framenum_real;
+    ac_block[ac_block_count].start = framenum_real;
+    ac_block[ac_block_count].audio_channels = audio_channels;
+    last_audio_channels = audio_channels;
+    Debug(4, "Frame: %i Channels: %2i\n", framenum_real, audio_channels);
+}
+
+void ProcessACInfo(int audio_channels)
+{
+    if (last_audio_channels == audio_channels )
+        return;
+    ac_block[ac_block_count].end = framenum_real;
+    ac_block_count++;
+    InitializeACBlockArray(ac_block_count);
+    last_audio_channels = audio_channels;
+//    audio_channels_start = framenum_real;
+    ac_block[ac_block_count].start = framenum_real;
+    ac_block[ac_block_count].audio_channels = audio_channels;
+    last_audio_channels = audio_channels;
+    Debug(4, "Frame: %i Channels: %2i\n", framenum_real, audio_channels);
+}
 
 int MatchCutScene(unsigned char *cutscene)
 {
@@ -9505,7 +9918,8 @@ void LoadCutScene(const char *filename)
             fclose(cutscene_file);
         }
         fclose(cutscene_file);
-    }
+    } else
+         Debug(1, "Can't open cutfile \"%s\"\n", filename);
 }
 
 static DECLARE_ALIGNED(32, int, own_histogram)[4][256];
@@ -9811,7 +10225,7 @@ bool CheckSceneHasChanged(void)
             pthread_create(&th1, NULL, (void*)(void *)ScanTop, (void *)1);
             pthread_create(&th3, NULL, (void*)(void *)ScanLeft, (void *)2);
             pthread_create(&th4, NULL, (void*)(void *)ScanRight, (void *)3);
- //           Sleep(10L);
+            // Sleep(10L);
         }
         for (i=0; i < THREAD_WORKERS; i++) {
             sema_post(thwait[i]);
@@ -9854,6 +10268,8 @@ bool CheckSceneHasChanged(void)
             if (framearray) frame[frame_count].ar_ratio = last_ar_ratio;
         }
 
+        ProcessACInfoInit(frame[frame_count].audio_channels);
+
         for (i = max_brightness; i >= 0; i--) last_brightness += histogram[i] * i;
         last_brightness /= (width - (border * 2)) * (height - (border * 2)) / 16;
         if (framearray)
@@ -9879,6 +10295,7 @@ bool CheckSceneHasChanged(void)
     }
 
     ProcessARInfo(minY, maxY,minX, maxX);
+    ProcessACInfo(frame[frame_count].audio_channels);
     if (framearray) frame[frame_count].ar_ratio = last_ar_ratio;
 
     similar *= 1;
@@ -10007,6 +10424,7 @@ bool CheckSceneHasChanged(void)
         }
         else if (non_uniformity > 0)
         {
+//????
             if ((brightness <= max_avg_brightness) && uniform < non_uniformity )
             {
                 cause |= C_u;
@@ -10593,7 +11011,7 @@ void EdgeDetect(unsigned char* frame_ptr, int maskNumber)
         }
     }
     else
-    { //??????
+    {
         LOGO_X_LOOP
         {
             LOGO_Y_LOOP {
@@ -12333,10 +12751,17 @@ void InitComSkip(void)
     {
         max_ar_block_count = 100;
         ar_block = malloc((int)((max_ar_block_count + 1) * sizeof(ar_block_info)));
+        max_ac_block_count = 100;
+        ac_block = malloc((int)((max_ac_block_count + 1) * sizeof(ac_block_info)));
     }
     if (ar_block == NULL)
     {
-        Debug(0, "Could not allocate memory for aspect ratio cblock array\n");
+        Debug(0, "Could not allocate memory for aspect ratio block array\n");
+        exit(31);
+    }
+    if (ac_block == NULL)
+    {
+        Debug(0, "Could not allocate memory for audio channel block array\n");
         exit(31);
     }
 //	}
@@ -12365,6 +12790,7 @@ void InitComSkip(void)
     black_count = 0;
     block_count = 0;
     ar_block_count = 0;
+    ac_block_count = 0;
     framenum_real = 0;
     frames_with_logo = 0;
     framenum = 0;
@@ -13250,10 +13676,10 @@ void OutputFrameArray(bool screenOnly)
         }
         else
         {
-            fprintf(raw, "%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%f, %i",
+            fprintf(raw, "%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%i,%f,%i,%i",
                     i, frame[i].brightness, frame[i].schange_percent*5, frame[i].logo_present,
                     frame[i].uniform, frame[i].volume,  frame[i].minY,frame[i].maxY,(int)((frame[i].ar_ratio)*100),
-                    (int)(frame[i].currentGoodEdge * 500), frame[i].isblack,(int)frame[i].cutscenematch,  frame[i].minX,frame[i].maxX,frame[i].hasBright,frame[i].dimCount, frame[i].pts, frame[i].cur_segment
+                    (int)(frame[i].currentGoodEdge * 500), frame[i].isblack,(int)frame[i].cutscenematch,  frame[i].minX,frame[i].maxX,frame[i].hasBright,frame[i].dimCount, frame[i].pts, frame[i].cur_segment, frame[i].audio_channels
                    );
 #ifdef FRAME_WITH_HISTOGRAM
             for (k = 0; k < 32; k++)
@@ -13292,6 +13718,7 @@ void InitializeFrameArray(long i)
 #endif
     frame[i].uniform = 0;
     frame[i].ar_ratio = AR_UNDEF;
+    frame[i].audio_channels = AC_UNDEF;
     frame[i].minY = 0;
     frame[i].maxY = 0;
     frame[i].isblack = 0;
@@ -13356,6 +13783,16 @@ void InitializeARBlockArray(long i)
     }
 }
 
+void InitializeACBlockArray(long i)
+{
+    if (ac_block_count >= max_ac_block_count)
+    {
+        max_ac_block_count += 20;
+        ac_block = realloc(ac_block, (max_ac_block_count + 2) * sizeof(ac_block_info));
+        Debug(9, "Resizing audio channel block array to accomodate %i AC groups.\n", max_ac_block_count);
+    }
+}
+
 void InitializeBlockArray(long i)
 {
     if (block_count >= max_block_count)
@@ -13378,6 +13815,7 @@ void InitializeBlockArray(long i)
     cblock[i].score = 1.0;
     cblock[i].combined_count = 0;
     cblock[i].ar_ratio = AR_UNDEF;
+    cblock[i].audio_channels = AC_UNDEF;
     cblock[i].brightness = 0;
     cblock[i].volume = 0;
     cblock[i].silence = 0;
@@ -13507,6 +13945,7 @@ again:
         frame[frame_count].dimCount = 0;
         frame[frame_count].pts = (frame_count - 1) / fps;
         frame[frame_count].pict_type = '?';
+        frame[frame_count].audio_channels = 2;
 
 
         // Split Line Apart
@@ -13585,6 +14024,12 @@ again:
                     break;
                 case 16:
                     frame[frame_count].pts = strtod(split, NULL);
+                    break;
+                case 17:
+                    frame[frame_count].cur_segment = strtol(split, NULL, 10);
+                    break;
+                case 18:
+                    frame[frame_count].audio_channels = strtol(split, NULL, 10);
                     break;
 
 
@@ -13752,10 +14197,12 @@ ccagain:
 //			if (frame[i].maxX == 0)
 //				videowidth = width = (int) ((frame[i].maxY - frame[i].minY) * frame[i].ar_ratio );
             ProcessARInfoInit(frame[i].minY, frame[i].maxY, frame[i].minX, frame[i].maxX);
+            ProcessACInfoInit(frame[i].audio_channels);
         }
         else
         {
             ProcessARInfo(frame[i].minY, frame[i].maxY, frame[i].minX, frame[i].maxX);
+            ProcessACInfo(frame[i].audio_channels);
         }
         frame[i].ar_ratio = last_ar_ratio;
 
@@ -13793,10 +14240,11 @@ ccagain:
                 if (frame[i].brightness <= max_avg_brightness && frame[i].hasBright < maxbright && frame[i].dimCount < (int)(.05 * videowidth * height))
                     frame[i].isblack |= C_b;
             }
-
-            frame[i].isblack &= ~C_u;
-            if (!(frame[i].isblack & C_b) && non_uniformity > 0 && frame[i].uniform < non_uniformity && frame[i].brightness < 250 /*&& frame[i].volume < max_volume*/ )
-                frame[i].isblack |= C_u;
+            if (i>1) { // Uniform not calculated for frame 1
+                frame[i].isblack &= ~C_u;
+                if (!(frame[i].isblack & C_b) && non_uniformity > 0 && frame[i].uniform < non_uniformity && frame[i].brightness < 250 /*&& frame[i].volume < max_volume*/ )
+                    frame[i].isblack |= C_u;
+            }
         }
         else
         {
