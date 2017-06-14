@@ -61,6 +61,9 @@
 #endif
 
 
+#define MAX(X,Y) (X>Y?X:Y)
+#define MIN(X,Y) (X<Y?X:Y)
+
 // max number of frames that can be marked
 #define MAX_IDENTIFIERS 300000
 #define MAX_COMMERCIALS 100000
@@ -700,7 +703,7 @@ unsigned int		min_black_frames_for_break = 1;
 bool				detectBlackFrames;
 bool				detectSceneChanges;
 int             dummy1;
-unsigned char*		frame_ptr;
+unsigned char*		frame_ptr = 0;
 int dummy2;
 
 // bool				frameIsBlack;
@@ -1939,11 +1942,11 @@ void InitScanLines()
             if ( clogoMinX > videowidth - clogoMaxX)   // Most pixels left of the logo
             {
                 lineStart[i] = border;
-                lineEnd[i] = clogoMinX-LOGO_BORDER;
+                lineEnd[i] = MAX(0,clogoMinX-LOGO_BORDER);
             }
             else
             {
-                lineStart[i] = clogoMaxX+LOGO_BORDER;
+                lineStart[i] = MIN(videowidth-1,clogoMaxX+LOGO_BORDER);
                 lineEnd[i] = videowidth-1-border;
             }
         }
@@ -1960,9 +1963,9 @@ void InitHasLogo()
 
     int x,y;
     memset(haslogo, 0, MAXWIDTH*MAXHEIGHT*sizeof(char));
-    for (y = clogoMinY - LOGO_BORDER; y < clogoMaxY + LOGO_BORDER; y++)
+    for (y = MAX(0,clogoMinY - LOGO_BORDER); y < MIN(MAXHEIGHT,clogoMaxY + LOGO_BORDER); y++)
     {
-        for (x = clogoMinX-LOGO_BORDER; x < clogoMaxX + LOGO_BORDER ; x++)
+        for (x = MAX(0,clogoMinX-LOGO_BORDER); x < MIN(MAXWIDTH,clogoMaxX + LOGO_BORDER) ; x++)
         {
             haslogo[y*width+x] = 1;
         }
@@ -9922,7 +9925,10 @@ void LoadCutScene(const char *filename)
          Debug(1, "Can't open cutfile \"%s\"\n", filename);
 }
 
-static DECLARE_ALIGNED(32, int, own_histogram)[4][256];
+#define OWN_HISTOGRAM_WIDTH 4
+#define OWN_HISTOGRAM_HEIGHT 256
+
+static DECLARE_ALIGNED(32, int, own_histogram)[OWN_HISTOGRAM_WIDTH][OWN_HISTOGRAM_HEIGHT];
 int scan_step;
 
 #define SCAN_MULTI
@@ -9961,6 +9967,12 @@ again:
             if (haslogo[i])
                 continue;
             hereBright = frame_ptr[i];
+#ifdef DEBUG_HERE_BRIGHT_MEM
+            if (hereBright >= OWN_HISTOGRAM_HEIGHT) {
+            	printf("Error, invalid here bright %i >= %i", hereBright, OWN_HISTOGRAM_HEIGHT);
+            	exit(1);
+            }
+#endif
             own_histogram[0][hereBright]++;
             if (hereBright > test_brightness)
                 brightCount++;
@@ -10011,6 +10023,12 @@ again:
             if (haslogo[i])
                 continue;
             hereBright = frame_ptr[i];
+#ifdef DEBUG_HERE_BRIGHT_MEM
+            if (hereBright >= OWN_HISTOGRAM_HEIGHT) {
+            	printf("Error, invalid here bright %i >= %i", hereBright, OWN_HISTOGRAM_HEIGHT);
+            	exit(1);
+            }
+#endif
             own_histogram[1][hereBright]++;
             if (hereBright > test_brightness)
                 brightCount++;
@@ -10061,6 +10079,12 @@ again:
             if (haslogo[i])
                 continue;
             hereBright = frame_ptr[i];
+#ifdef DEBUG_HERE_BRIGHT_MEM
+            if (hereBright >= OWN_HISTOGRAM_HEIGHT) {
+            	printf("Error, invalid here bright %i >= %i", hereBright, OWN_HISTOGRAM_HEIGHT);
+            	exit(1);
+            }
+#endif
             own_histogram[2][hereBright]++;
             if (hereBright > test_brightness)
                 brightCount++;
@@ -10111,6 +10135,12 @@ again:
             if (haslogo[i])
                 continue;
             hereBright = frame_ptr[i];
+#ifdef DEBUG_HERE_BRIGHT_MEM
+            if (hereBright >= OWN_HISTOGRAM_HEIGHT) {
+            	printf("Error, invalid here bright %i >= %i", hereBright, OWN_HISTOGRAM_HEIGHT);
+            	exit(1);
+            }
+#endif
             own_histogram[3][hereBright]++;
             if (hereBright > test_brightness)
                 brightCount++;
@@ -10420,7 +10450,7 @@ bool CheckSceneHasChanged(void)
         if ((brightness <= max_avg_brightness) && hasBright <= maxbright * width * height / 720 / 480 && !isDim /* && uniform < non_uniformity */  /* && !lastLogoTest because logo disappearance is detected too late*/)
         {
             cause |= C_b;
-            Debug(7, "Frame %6i (%.3fs) - Black frame with brightness of %i,uniform of %i and volume of %i\n", framenum_real, get_frame_pts(framenum_real), brightness, uniform, black[black_count-1].volume);
+            Debug(7, "Frame %6i (%.3fs) - Black frame with brightness of %i,uniform of %i and volume of %i\n", framenum_real, get_frame_pts(framenum_real), brightness, uniform, black[MAX(0,black_count - 1)].volume);
         }
         else if (non_uniformity > 0)
         {
@@ -10428,7 +10458,7 @@ bool CheckSceneHasChanged(void)
             if ((brightness <= max_avg_brightness) && uniform < non_uniformity )
             {
                 cause |= C_u;
-                Debug(7, "Frame %6i (%.3fs) - Black frame with brightness of %i,uniform of %i and volume of %i\n", framenum_real, get_frame_pts(framenum_real), brightness, uniform, black[black_count-1].volume);
+                Debug(7, "Frame %6i (%.3fs) - Black frame with brightness of %i,uniform of %i and volume of %i\n", framenum_real, get_frame_pts(framenum_real), brightness, uniform, black[MAX(0,black_count - 1)].volume);
             }
             if (brightness > max_avg_brightness && uniform < non_uniformity && brightness < 250 )
             {
@@ -14314,7 +14344,7 @@ ccagain:
             */
         }
 
-        if ((frame[i].schange_percent < 20) && (black[black_count - 1].frame != i))
+        if ((frame[i].schange_percent < 20) && i > 1 && black_count > 0 && (black[black_count - 1].frame != i))
         {
             if (frame[i].brightness < frame[i - 1].brightness * 2)
             {
