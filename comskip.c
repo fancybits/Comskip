@@ -12176,7 +12176,6 @@ void SaveLogoMaskData(void)
     FILE*	logo_file;
     int		x;
     int		y;
-    sprintf(logofilename, "%s.logo.txt", workbasename);
     logo_file = myfopen(logofilename, "w");
     if (!logo_file)
     {
