@@ -77,6 +77,7 @@ FILE*			ini_file = NULL;
 FILE*			plist_cutlist_file = NULL;
 FILE*			zoomplayer_cutlist_file = NULL;
 FILE*			zoomplayer_chapter_file = NULL;
+FILE*			scf_file = NULL;
 FILE*			vcf_file = NULL;
 FILE*			vdr_file = NULL;
 FILE*			projectx_file = NULL;
@@ -614,6 +615,7 @@ bool				enable_mencoder_pts = false;
 bool				output_plist_cutlist = false;
 bool				output_zoomplayer_cutlist = false;
 bool				output_zoomplayer_chapter = false;
+bool				output_scf = false;
 bool				output_videoredo = false;
 bool				output_videoredo3 = false;
 bool				output_ipodchap = false;
@@ -900,6 +902,7 @@ char *				FindString(char* str1, char* str2, char *v);
 void				AddIniString( char *s);
 char*				intSecondsToStrMinutes(int seconds);
 char*				dblSecondsToStrMinutes(double seconds);
+char*				dblSecondsToStrMinutesFrames(double seconds);
 FILE*				LoadSettings(int argc, char ** argv);
 int					GetAvgBrightness(void);
 bool				CheckFrameIsBlack(void);
@@ -6112,6 +6115,21 @@ void OpenOutputFiles()
         }
     }
 
+    if (output_scf)
+    {
+        sprintf(filename, "%s.scf", outbasename);
+        scf_file = myfopen(filename, "w");
+        if (!scf_file)
+        {
+            fprintf(stderr, "%s - could not create file %s\n", strerror(errno), filename);
+            exit(6);
+        }
+        else
+        {
+            output_scf = true;
+        }
+    }
+
     if (output_edl)
     {
         sprintf(filename, "%s.edl", outbasename);
@@ -6760,6 +6778,16 @@ void OutputCommercialBlock(int i, long prev, long start, long end, bool last)
     }
     CLOSEOUTFILE(zoomplayer_chapter_file);
 
+    if (scf_file && prev < start && end - start > fps)
+    {
+      int rounded_fps = (int)(fps + .5);
+      fprintf(scf_file, "CHAPTER%02i=%02li:%02li:%02li.%03li\n", i * 2 + 1, start / (3600 * rounded_fps) % 60, start / (60 * rounded_fps) % 60, start / rounded_fps % 60, start % rounded_fps);
+      fprintf(scf_file, "CHAPTER%02iNAME=%s\n", i * 2 + 1, "Commercial starts");
+      fprintf(scf_file, "CHAPTER%02i=%02li:%02li:%02li.%03li\n", i * 2 + 2, end / (3600 * rounded_fps) % 60, end / (60 * rounded_fps) % 60, end / rounded_fps % 60, end % rounded_fps);
+      fprintf(scf_file, "CHAPTER%02iNAME=%s\n", i * 2 + 2, "Commercial ends");
+    }
+    CLOSEOUTFILE(scf_file);
+
     if (ffmeta_file) {
         if (prev != -1 && prev < start) {
             fprintf(ffmeta_file, "[CHAPTER]\nTIMEBASE=1/100\nSTART=%" PRIu64 "\nEND=%" PRIu64 "\ntitle=Show Segment\n", (uint64_t)(get_frame_pts(prev+1) * 100), (uint64_t)(get_frame_pts(start) * 100));
@@ -6792,8 +6820,8 @@ void OutputCommercialBlock(int i, long prev, long start, long end, bool last)
     {
         if (start < 5)
             start = 0;
-        fprintf(vdr_file, "%s start\n",	dblSecondsToStrMinutes(get_frame_pts(start)));
-        fprintf(vdr_file, "%s end\n", dblSecondsToStrMinutes(get_frame_pts(end)));
+        fprintf(vdr_file, "%s start\n",	dblSecondsToStrMinutesFrames(get_frame_pts(start)));
+        fprintf(vdr_file, "%s end\n", dblSecondsToStrMinutesFrames(get_frame_pts(end)));
     }
     CLOSEOUTFILE(vdr_file);
 
@@ -8311,6 +8339,18 @@ char* dblSecondsToStrMinutes(double seconds)
     return (tempString);
 }
 
+char* dblSecondsToStrMinutesFrames(double seconds)
+{
+    int minutes, hours;
+    hours = (int)(seconds / 3600);
+    seconds -= hours * 60 * 60;
+    minutes = (int)(seconds / 60);
+    seconds -= minutes * 60;
+    sprintf(tempString, "%0i:%.2i:%.2d.%.2d", hours, minutes, (int)seconds, (int)(((int)((seconds - (int)(seconds))*100.0)) * fps / 100.0));
+
+    return (tempString);
+}
+
 
 
 void LoadIniFile()
@@ -8514,6 +8554,7 @@ void LoadIniFile()
         if ((tmp = FindNumber(data, "output_plist_cutlist=", (double) output_plist_cutlist)) > -1) output_plist_cutlist = (bool) tmp;
         if ((tmp = FindNumber(data, "output_zoomplayer_cutlist=", (double) output_zoomplayer_cutlist)) > -1) output_zoomplayer_cutlist = (bool) tmp;
         if ((tmp = FindNumber(data, "output_zoomplayer_chapter=", (double) output_zoomplayer_chapter)) > -1) output_zoomplayer_chapter = (bool) tmp;
+        if ((tmp = FindNumber(data, "output_scf=", (double) output_scf)) > -1) output_scf = (bool) tmp;
         if ((tmp = FindNumber(data, "output_vcf=", (double) output_vcf)) > -1) output_vcf = (bool) tmp;
         if ((tmp = FindNumber(data, "output_vdr=", (double) output_vdr)) > -1) output_vdr = (bool) tmp;
         if ((tmp = FindNumber(data, "output_projectx=", (double) output_projectx)) > -1) output_projectx = (bool) tmp;
@@ -8613,6 +8654,7 @@ FILE* LoadSettings(int argc, char ** argv)
     struct arg_lit*		cl_playnice				= arg_lit0("n", "playnice", "Slows detection down");
     struct arg_lit*		cl_output_zp_cutlist	= arg_lit0(NULL, "zpcut", "Outputs a ZoomPlayer cutlist");
     struct arg_lit*		cl_output_zp_chapter	= arg_lit0(NULL, "zpchapter", "Outputs a ZoomPlayer chapter file");
+    struct arg_lit*		cl_output_scf			= arg_lit0(NULL, "scf", "Outputs a simple chapter file for mkvmerge");
     struct arg_lit*		cl_output_vredo			= arg_lit0(NULL, "videoredo", "Outputs a VideoRedo cutlist");
     struct arg_lit*		cl_output_vredo3		= arg_lit0(NULL, "videoredo3", "Outputs a VideoRedo3 cutlist");
     struct arg_lit*		cl_output_csv			= arg_lit0(NULL, "csvout", "Outputs a csv of the frame array");
@@ -8648,6 +8690,7 @@ FILE* LoadSettings(int argc, char ** argv)
         cl_playnice,
         cl_output_zp_cutlist,
         cl_output_zp_chapter,
+        cl_output_scf,
         cl_output_vredo,
         cl_output_vredo3,
         cl_output_csv,
@@ -9141,33 +9184,39 @@ FILE* LoadSettings(int argc, char ** argv)
         else if (loadingCSV)
         {
             log_file = myfopen(logfilename, "w");
-            fprintf(log_file, "################################################################\n");
-            fprintf(log_file, "Generated using %s %s\n", COMSKIPPUBLIC, PACKAGE_STRING);
-            fprintf(log_file, "Loading comskip csv file - %s\n", in->filename[0]);
-            fprintf(log_file, "Time at start of run:\n%s", ctime(&ltime));
-            fprintf(log_file, "################################################################\n");
-            fclose(log_file);
+            if (log_file) {
+                fprintf(log_file, "################################################################\n");
+                fprintf(log_file, "Generated using %s %s\n", COMSKIPPUBLIC, PACKAGE_STRING);
+                fprintf(log_file, "Loading comskip csv file - %s\n", in->filename[0]);
+                fprintf(log_file, "Time at start of run:\n%s", ctime(&ltime));
+                fprintf(log_file, "################################################################\n");
+                fclose(log_file);
+            }
             log_file = NULL;
         }
         else if (logo_file)
         {
             fclose(logo_file);
             log_file = myfopen(logfilename, "a+");
-            fprintf(log_file, "################################################################\n");
-            fprintf(log_file, "Starting second pass using %s\n", logofilename);
-            fprintf(log_file, "Time at start of second run:\n%s", ctime(&ltime));
-            fprintf(log_file, "################################################################\n");
-            fclose(log_file);
+            if (log_file) {
+                fprintf(log_file, "################################################################\n");
+                fprintf(log_file, "Starting second pass using %s\n", logofilename);
+                fprintf(log_file, "Time at start of second run:\n%s", ctime(&ltime));
+                fprintf(log_file, "################################################################\n");
+                fclose(log_file);
+            }
             log_file = NULL;
         }
         else
         {
             log_file = myfopen(logfilename, "w");
-            fprintf(log_file, "################################################################\n");
-            fprintf(log_file, "Generated using %s %s\n", COMSKIPPUBLIC, PACKAGE_STRING);
-            fprintf(log_file, "Time at start of run:\n%s", ctime(&ltime));
-            fprintf(log_file, "################################################################\n");
-            fclose(log_file);
+            if (log_file) {
+                fprintf(log_file, "################################################################\n");
+                fprintf(log_file, "Generated using %s %s\n", COMSKIPPUBLIC, PACKAGE_STRING);
+                fprintf(log_file, "Time at start of run:\n%s", ctime(&ltime));
+                fprintf(log_file, "################################################################\n");
+                fclose(log_file);
+            }
             log_file = NULL;
         }
     }
@@ -9299,7 +9348,7 @@ FILE* LoadSettings(int argc, char ** argv)
         }
     }
 
-    out_file = plist_cutlist_file = zoomplayer_cutlist_file = zoomplayer_chapter_file = vcf_file = vdr_file = projectx_file = avisynth_file = cuttermaran_file = videoredo_file = videoredo3_file = btv_file = edl_file = ffmeta_file = ffsplit_file = live_file = ipodchap_file = edlp_file = edlx_file = mls_file = womble_file = mpgtx_file = dvrcut_file = dvrmstb_file = tuning_file = training_file = 0L;
+    out_file = plist_cutlist_file = zoomplayer_cutlist_file = zoomplayer_chapter_file = vcf_file = vdr_file = scf_file = projectx_file = avisynth_file = cuttermaran_file = videoredo_file = videoredo3_file = btv_file = edl_file = ffmeta_file = ffsplit_file = live_file = ipodchap_file = edlp_file = edlx_file = mls_file = womble_file = mpgtx_file = dvrcut_file = dvrmstb_file = tuning_file = training_file = 0L;
 
     if (cl_output_plist->count)
         output_plist_cutlist = true;
@@ -9307,6 +9356,8 @@ FILE* LoadSettings(int argc, char ** argv)
         output_zoomplayer_cutlist = true;
     if (cl_output_zp_chapter->count)
         output_zoomplayer_chapter = true;
+    if (cl_output_scf->count)
+        output_scf = true;
     if (cl_output_vredo->count)
         output_videoredo = true;
     if (cl_output_vredo3->count)
@@ -9358,8 +9409,8 @@ FILE* LoadSettings(int argc, char ** argv)
     if (!loadingTXT && (output_srt || output_smi ))
     {
 #ifdef PROCESS_CC
-        char filename[MAX_PATH];
-        char *CEW_argv[10];
+static        char filename[MAX_PATH];
+static        char *CEW_argv[10];
         i = 0;
         CEW_argv[i++] = "comskip.exe";
         if (output_smi)
@@ -9918,7 +9969,10 @@ void LoadCutScene(const char *filename)
                 b += cutscene[i][j];
             // csbrightness[i] = b/c;
             cutscenes++;
-            fclose(cutscene_file);
+        }
+        else
+        {
+            Debug(1, "ERROR: Loading from cutfile \"%s\" failed\n", c, filename);
         }
         fclose(cutscene_file);
     } else

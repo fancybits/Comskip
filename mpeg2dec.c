@@ -1481,6 +1481,7 @@ static int    prev_strange_framenum = 0;
                         Debug( 1,"\nSelftest %d FAILED\n", selftest);
                         exit(1);
                     }
+                    goto quit;          //Temporary till the seek error is fixed.
                     retries = 0;
                     exit(-1);
                 }
@@ -1674,7 +1675,15 @@ int stream_component_open(VideoState *is, int stream_index)
     }
 
 
-    codec = avcodec_find_decoder(codecCtx->codec_id);
+	codec = avcodec_find_decoder(codecCtx->codec_id);
+
+	// If decoding in hardware try if running on a Raspberry Pi and then use it's decoder instead.
+    if (hardware_decode) {
+		if (codecCtx->codec_id == AV_CODEC_ID_MPEG2VIDEO && avcodec_find_decoder_by_name("mpeg2_mmal") != NULL) codec = avcodec_find_decoder_by_name("mpeg2_mmal");
+		if (codecCtx->codec_id == AV_CODEC_ID_H264 && avcodec_find_decoder_by_name("h264_mmal") != NULL) codec = avcodec_find_decoder_by_name("h264_mmal");
+		if (codecCtx->codec_id == AV_CODEC_ID_MPEG4 && avcodec_find_decoder_by_name("mpeg4_mmal") != NULL) codec = avcodec_find_decoder_by_name("mpeg4_mmal");
+		if (codecCtx->codec_id == AV_CODEC_ID_VC1 && avcodec_find_decoder_by_name("vc1_mmal") != NULL) codec = avcodec_find_decoder_by_name("vc1_mmal");
+    }
 
     if (!hardware_decode) av_dict_set_int(&myoptions, "gray", 1, 0);
 
@@ -2233,7 +2242,8 @@ nextpacket:
                     is->seek_req++;
                     goto again;
                 }
-                if (retries) Debug( 9,"Retry t_pos=%" PRId64 ", l_pos=%" PRId64 ", t_pts=%" PRId64 ", l_pts=%" PRId64 "\n", last_packet_pos, packet->pos, last_packet_pts, packet->pts);
+                if (retries)
+                    Debug( 9,"Retry t_pos=%" PRId64 ", l_pos=%" PRId64 ", t_pts=%" PRId64 ", l_pts=%" PRId64 "\n", last_packet_pos, packet->pos, last_packet_pts, packet->pts);
                 is->seek_req = 0;
             }
             /*
@@ -2300,6 +2310,7 @@ nextpacket:
 
                     if ((live_tv && retries < live_tv_retries) /* || (selftest == 3 && retries == 0) */)
                     {
+                        double frame_delay = av_q2d(is->video_st->codec->time_base) * is->video_st->codec->ticks_per_frame;
 //                    uint64_t retry_target;
                         if (retries == 0)
                         {
@@ -2307,7 +2318,7 @@ nextpacket:
                                 retry_target = selftest_target;
 //                        retry_target = avio_tell(is->pFormatCtx->pb);
                             else
-                                retry_target = is->video_clock;
+                                retry_target = is->video_clock + frame_delay;
                         }
                         file_close();
                         Debug( 1,"\nRetry=%d at frame=%d, time=%8.2f seconds\n", retries, framenum, retry_target);
