@@ -8134,7 +8134,7 @@ bool IsStandardCommercialLength(double length, double tolerance, bool strict)
         length_count = 22;
     }
 #else
-    int		standard_length[] = { 10, 15, 20, 25, 30,  45, 60, 90, 120, 150, 180,  5, 35, 40, 50, 70, 75};
+    int		standard_length[] = { 10, 15, 20, 25, 30,  45, 60, 90, 120, 150, 180,  35, 40, 50, 70, 75, 105};
     if (strict)
     {
         length_count = 11;
