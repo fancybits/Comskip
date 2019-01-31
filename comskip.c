@@ -11778,6 +11778,15 @@ bool SearchForLogoEdges(void)
             );
 //			logoInfoAvailable = false;
         }
+        else if (logoPercentageOfScreen * 100 < 0.8)
+        {
+            Debug(
+                3,
+                "Edge count - %i\tPercentage of screen - %.2f%% TOO SMALL, CAN'T BE A LOGO.\n",
+                i,
+                logoPercentageOfScreen * 100
+            );
+        }
         else
         {
             Debug(3, "Edge count - %i\tPercentage of screen - %.2f%%, Check: %i\n", i, logoPercentageOfScreen * 100,doublCheckLogoCount);
