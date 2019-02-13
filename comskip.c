@@ -11780,7 +11780,7 @@ bool SearchForLogoEdges(void)
             );
 //			logoInfoAvailable = false;
         }
-        else if (logo_min_percentage_of_screen > 0 && logoPercentageOfScreen * 100 < logo_min_percentage_of_screen)
+        else if (logo_min_percentage_of_screen > 0 && logoPercentageOfScreen < logo_min_percentage_of_screen)
         {
             Debug(
                 3,
