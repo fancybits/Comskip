@@ -578,6 +578,7 @@ bool				intelligent_brightness = false;
 double				logo_threshold = 0.80;
 double				logo_percentage_threshold = 0.25;
 double				logo_max_percentage_of_screen = 0.12;
+double				logo_min_percentage_of_screen = 0.00;
 int					logo_filter = 0;
 int					non_uniformity = 500;
 int					brightness_jump = 200;
@@ -8494,6 +8495,7 @@ void LoadIniFile()
         if ((tmp = FindNumber(data, "give_up_logo_search=", (double) giveUpOnLogoSearch)) > -1) giveUpOnLogoSearch = (int)tmp;
         if ((tmp = FindNumber(data, "delay_logo_search=", (double) delay_logo_search)) > -1) delay_logo_search = (int)tmp;
         if ((tmp = FindNumber(data, "logo_max_percentage_of_screen=", (double) logo_max_percentage_of_screen)) > -1) logo_max_percentage_of_screen = (double)tmp;
+        if ((tmp = FindNumber(data, "logo_min_percentage_of_screen=", (double) logo_min_percentage_of_screen)) > -1) logo_min_percentage_of_screen = (double)tmp;
         if ((tmp = FindNumber(data, "ticker_tape=", (double) ticker_tape)) > -1) ticker_tape = (int)tmp;
         if ((tmp = FindNumber(data, "ticker_tape_percentage=", (double) ticker_tape_percentage)) > -1) ticker_tape_percentage = (int)tmp;
         if ((tmp = FindNumber(data, "ignore_side=", (double) ignore_side)) > -1) ignore_side = (int)tmp;
@@ -11778,7 +11780,7 @@ bool SearchForLogoEdges(void)
             );
 //			logoInfoAvailable = false;
         }
-        else if (logoPercentageOfScreen * 100 < 0.8)
+        else if (logo_min_percentage_of_screen > 0 && logoPercentageOfScreen * 100 < logo_min_percentage_of_screen)
         {
             Debug(
                 3,
