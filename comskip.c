@@ -18,6 +18,11 @@
 #include <argtable2.h>
 #include "comskip.h"
 
+// dummy init relys on improper linkage of iHD driver without whole-archive
+int __vaDriverInit_1_5(void *ctx) {
+    return -1;
+}
+
 // Define detection methods
 #define BLACK_FRAME		1
 #define LOGO			2
