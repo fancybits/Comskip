@@ -14041,6 +14041,7 @@ again:
     }
     InitComSkip();
     frame_count = 1;
+    pict_type = '?';
     while (fgets(line, sizeof(line), in_file) != NULL)
     {
         i = 0;
@@ -14198,8 +14199,6 @@ again:
     }
 
 
-    FindLogoThreshold();
-
     height = maxmaxY + minminY;
     videowidth = width = maxmaxX + minminX;
 
@@ -14214,6 +14213,7 @@ again:
     min_brightness_found = 255;
     for (i = 1; i < frame_count; i++)
     {
+        framenum_real = i;
 ccagain:
         if (dump_data_file && ccDataFrame == 0)
         {
@@ -14291,9 +14291,6 @@ ccagain:
             silenceHistogram[(frame[i].volume < 255 ? frame[i].volume : 255)]++;
         }
 
-
-
-        framenum_real = i;
 
         if (frame[i].maxX == 0)
         {
@@ -15272,6 +15269,15 @@ void ProcessCCData(void)
     unsigned char	packetCount;
 
     if (!initialized) return;
+
+    // Reset state on the first frame
+    if (framenum == 0) {
+        last_cc_type = NONE;
+        current_cc_type = NONE;
+        cc_on_screen = false;
+        cc_in_memory = false;
+    }
+
     if (verbose >= 12)
     {
         p = (unsigned char *)temp;
