@@ -19,7 +19,7 @@
 #include "comskip.h"
 
 // dummy init relys on improper linkage of iHD driver without whole-archive
-int __vaDriverInit_1_5(void *ctx) {
+int __vaDriverInit_iHD(void *ctx) {
     return -1;
 }
 
