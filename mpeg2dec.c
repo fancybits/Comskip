@@ -883,7 +883,7 @@ int SubmitFrame(AVStream        *video_st, AVFrame         *pFrame , double pts)
         height= pFrame->height;
         changed = 1;
     }
-    if (width != pFrame->linesize[0] && pFrame->linesize[0] > 100 && pFrame->linesize[0]  < 2000)
+    if (width != pFrame->linesize[0] && pFrame->linesize[0] > 100 && pFrame->linesize[0]  < 3841)
     {
         width= pFrame->linesize[0];
         changed = 1;
