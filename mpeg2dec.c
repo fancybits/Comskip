@@ -869,12 +869,17 @@ int SubmitFrame(AVStream        *video_st, AVFrame         *pFrame , double pts)
 {
     int res=0;
     int changed = 0;
+    int line = 0;
+
+    if (pFrame->format == AV_PIX_FMT_YUV420P10LE) {
+        line = 1;
+    }
 
 //	bitrate = pFrame->bit_rate;
-    if (pFrame->linesize[0] > 3840 || pFrame->height > 1200 || pFrame->linesize[0] < 100 || pFrame->height < 100)
+    if (pFrame->linesize[line] > 3840 || pFrame->height > 1200 || pFrame->linesize[line] < 100 || pFrame->height < 100)
     {
         Debug(1, "Panic: illegal height (%d), width (%d) or frame period (%d)\n",
-              pFrame->height, pFrame->width, pFrame->linesize[0]);
+              pFrame->height, pFrame->width, pFrame->linesize[line]);
         frame_ptr = NULL;
         return(0);
     }
@@ -883,19 +888,19 @@ int SubmitFrame(AVStream        *video_st, AVFrame         *pFrame , double pts)
         height= pFrame->height;
         changed = 1;
     }
-    if (width != pFrame->linesize[0] && pFrame->linesize[0] > 100 && pFrame->linesize[0]  < 3841)
+    if (width != pFrame->linesize[line] && pFrame->linesize[line] > 100 && pFrame->linesize[line]  < 3841)
     {
-        width= pFrame->linesize[0];
+        width= pFrame->linesize[line];
         changed = 1;
     }
-    if (videowidth != pFrame->width && pFrame->width > 100 && pFrame->width < 2000)
+    if (videowidth != pFrame->width/(line==0 ? 1 : 2) && pFrame->width > 100 && pFrame->width < 2000)
     {
-        videowidth= pFrame->width;
+        videowidth= pFrame->width/(line==0 ? 1 : 2);
         changed = 1;
     }
     if (changed) Debug(5, "Format changed to [%d : %d]\n", videowidth, height);
     infopos = headerpos;
-    frame_ptr = pFrame->data[0];
+    frame_ptr = pFrame->data[line];
     if (frame_ptr == NULL)
     {
         return(0);; // return; // exit(2);
