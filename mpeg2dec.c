@@ -40,6 +40,7 @@ double test_pts = 0.0;
 #include <libavutil/avutil.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/samplefmt.h>
+#include <libswscale/swscale.h>
 
 #undef HARDWARE_DECODE
 #ifdef HARDWARE_DECODE
@@ -131,6 +132,7 @@ typedef struct VideoState
     AVFrame         *frame;
     double			 duration;
     double			 fps;
+    struct SwsContext *img_convert_ctx;
 } VideoState;
 
 VideoState      *is;
@@ -1233,6 +1235,19 @@ static int    prev_strange_framenum = 0;
     if(frameFinished)
     {
 
+        // convert to 8bit
+        if (is->pFrame->format == AV_PIX_FMT_YUV420P10LE) {
+            is->img_convert_ctx = sws_getCachedContext(is->img_convert_ctx, is->pFrame->width, is->pFrame->height, is->pFrame->format, is->pFrame->width, is->pFrame->height, AV_PIX_FMT_YUV420P, SWS_FAST_BILINEAR, NULL, NULL, NULL);
+            AVFrame *newframe = av_frame_alloc();
+            av_frame_copy_props(newframe, is->pFrame);
+            newframe->format = AV_PIX_FMT_YUV420P;
+            newframe->width = is->pFrame->width;
+            newframe->height = is->pFrame->height;
+            av_frame_get_buffer(newframe, 32);
+            sws_scale(is->img_convert_ctx, (const uint8_t * const *)is->pFrame->data, is->pFrame->linesize, 0, is->pFrame->height, newframe->data, newframe->linesize);
+            av_frame_unref(is->pFrame);
+            is->pFrame = newframe;
+        }
 
         frame_delay = av_q2d(is->video_st->codec->time_base) * is->video_st->codec->ticks_per_frame ;
         repeat = av_stream_get_parser(is->video_st) ? av_stream_get_parser(is->video_st)->repeat_pict: 4;
