@@ -159,7 +159,7 @@ int64_t pev_best_effort_timestamp = 0;
 
 int video_stream_index = -1;
 int audio_stream_index = -1;
-int width, height;
+extern int width, height;
 int have_frame_rate ;
 int stream_index;
 
