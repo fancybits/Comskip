@@ -14,11 +14,7 @@ For now, integration with ccextractor is a quick hack. It could get better with 
 #include <fcntl.h>
 
 LONG process_block (unsigned char *data, LONG length);
-<<<<<<< HEAD
-extern LONG result;
-=======
 extern LONG _result;
->>>>>>> upstream/master
 
 unsigned int header_state;
 unsigned char psm_es_type[256];
@@ -300,11 +296,7 @@ int get_byte ()
 {
 	unsigned char b;
 	buffered_read_byte(&b);
-<<<<<<< HEAD
-    if (result==1)
-=======
     if (_result==1)
->>>>>>> upstream/master
         return b;
     else
         return 0;
@@ -346,11 +338,7 @@ static int find_next_start_code(int *size_ptr,
     {
         unsigned char cx;
         buffered_read_byte (&cx);
-<<<<<<< HEAD
-        if (result!=1)
-=======
         if (_result!=1)
->>>>>>> upstream/master
             break;
         v = cx;
         n--;
@@ -733,11 +721,7 @@ skip:
         s->streams_changed(s->stream_change_data);
         }
         */
-<<<<<<< HEAD
-found:
-=======
 // found:
->>>>>>> upstream/master
         /* if(st->discard >= AVDISCARD_ALL)
         goto skip; */
         if (startcode >= 0xa0 && startcode <= 0xbf)
