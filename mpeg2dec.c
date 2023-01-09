@@ -23,6 +23,8 @@
 
 #include "platform.h"
 #include "vo.h"
+#include "comskip.h"
+
 #ifdef HAVE_SDL
 #include <SDL.h>
 #endif
@@ -42,9 +44,8 @@ double test_pts = 0.0;
 #include <libavutil/samplefmt.h>
 #include <libswscale/swscale.h>
 
-#undef HARDWARE_DECODE
 #ifdef HARDWARE_DECODE
-#include <ffmpeg.h>
+#include <fftools/ffmpeg.h>
 const HWAccel hwaccels[] = {
 #if HAVE_VDPAU_X11
     { "vdpau", vdpau_init, HWACCEL_VDPAU, AV_PIX_FMT_VDPAU },
@@ -64,6 +65,9 @@ static InputStream *ist = &inputs;
 
 
 extern int      hardware_decode;
+extern int      use_cuvid;
+extern int      use_vdpau;
+extern int      use_dxva2;
 int av_log_level=AV_LOG_INFO;
 
 
@@ -90,7 +94,7 @@ typedef struct VideoPicture
 typedef struct VideoState
 {
     AVFormatContext *pFormatCtx;
-    AVCodecContext *dec_ctx;
+    AVCodecContext *dec_ctx, *audio_ctx, *subtitle_ctx;
     int             videoStream, audioStream, subtitleStream;
 
     int             av_sync_type;
@@ -159,7 +163,7 @@ int64_t pev_best_effort_timestamp = 0;
 
 int video_stream_index = -1;
 int audio_stream_index = -1;
-extern int width, height;
+// int width, height;
 int have_frame_rate ;
 int stream_index;
 
@@ -242,8 +246,8 @@ int muxrate,byterate=10000;
 #define   FTELL    _ftelli64
 // The following two functions are undocumented and not included in any public header,
 // so we need to declare them ourselves
-extern int  _fseeki64(FILE *, int64_t, int);
-extern int64_t _ftelli64(FILE *);
+//extern int  _fseeki64(FILE *, int64_t, int);
+//extern int64_t _ftelli64(FILE *);
 
 int soft_seeking=0;
 extern char	inbasename[];
@@ -317,7 +321,8 @@ extern int live_tv_retries;
 extern int dvrms_live_tv_retries;
 int retries;
 
-extern void set_fps(double frame_delay, double dfps, int ticks, double rfps, double afps);
+//extern void set_fps(double frame_delay, double dfps, int ticks, double rfps, double afps);
+extern void set_fps(double frame_delay);
 extern void dump_video (char *start, char *end);
 extern void dump_audio (char *start, char *end);
 extern void	Debug(int level, char* fmt, ...);
@@ -341,7 +346,7 @@ static void signal_handler (int sig)
 
 
 
-#define AUDIOBUFFER	800000
+#define AUDIOBUFFER	1600000
 
 static double base_apts = 0.0, apts, top_apts = 0.0;
 static DECLARE_ALIGNED(16, short, audio_buffer[AUDIOBUFFER]);
@@ -349,7 +354,7 @@ static short *audio_buffer_ptr = audio_buffer;
 static int audio_samples = 0;
 #define ISSAME(T1,T2) (fabs((T1) - (T2)) < 0.001)
 
-
+//extern double fps;
 static int sound_frame_counter = 0;
 extern double get_fps();
 extern int get_samplerate();
@@ -370,6 +375,30 @@ int frames_without_sound = 0;
 int frames_with_loud_sound = 0;
 
 
+void list_codecs()
+{
+        const AVCodec *p;
+        int * p_i = (int *)NULL;
+        int i = 0;
+//        avcodec_register_all();
+        p = av_codec_iterate((void **)&p_i);
+        printf("Decoders:\n");
+        printf("---------\n");
+        while (p != NULL) {
+            if (av_codec_is_decoder(p)) {
+                printf("%s", p->name);
+                i += strlen(p->name);
+                if (i > 80) {
+                    printf("\n");
+                    i = 0;
+                } else
+                    printf(", ");
+            }
+            p = av_codec_iterate((void **)&p_i);
+        }
+        printf("\n");
+}
+
 
 int retreive_frame_volume(double from_pts, double to_pts)
 {
@@ -378,7 +407,7 @@ int retreive_frame_volume(double from_pts, double to_pts)
     VideoState *is = global_video_state;
     int i;
     double calculated_delay;
-    int s_per_frame = (to_pts - from_pts) * (double)(is->audio_st->codec->sample_rate+1);
+    int s_per_frame = (to_pts - from_pts) * (double)(is->audio_st->codecpar->sample_rate+1);
 
 
     if (s_per_frame > 1 && base_apts <= from_pts && to_pts < top_apts )
@@ -387,7 +416,7 @@ int retreive_frame_volume(double from_pts, double to_pts)
 
 
  //       Debug(1,"fame=%d, =base=%6.3f, from=%6.3f, samples=%d, to=%6.3f, top==%6.3f\n", -1, base_apts, from_pts, s_per_frame, to_pts, top_apts);
-        buffer = & audio_buffer[(int)((from_pts - base_apts) * ((double)is->audio_st->codec->sample_rate+0.5) )];
+        buffer = & audio_buffer[(int)((from_pts - base_apts) * ((double)is->audio_st->codecpar->sample_rate+0.5) )];
 
         volume = 0;
         if (sample_file) fprintf(sample_file, "Frame %i\n", sound_frame_counter);
@@ -400,7 +429,7 @@ int retreive_frame_volume(double from_pts, double to_pts)
         volume = volume/s_per_frame;
         DUMP_TIMING("a  read", is->audio_clock, to_pts, from_pts, (double)volume, s_per_frame);
 
-        audio_samples -= (int)((from_pts - base_apts) * (is->audio_st->codec->sample_rate+0.5)); // incomplete frame before complete frame
+        audio_samples -= (int)((from_pts - base_apts) * (is->audio_st->codecpar->sample_rate+0.5)); // incomplete frame before complete frame
         audio_samples -= s_per_frame;
 
 
@@ -433,7 +462,7 @@ int retreive_frame_volume(double from_pts, double to_pts)
             }
         }
         base_apts = to_pts;
-        top_apts = base_apts + audio_samples / (double)(is->audio_st->codec->sample_rate);
+        top_apts = base_apts + audio_samples / (double)(is->audio_st->codecpar->sample_rate);
         sound_frame_counter++;
     }
     return(volume);
@@ -443,13 +472,16 @@ void backfill_frame_volumes()
 {
     int f;
     int volume;
+    double local_initial_pts = initial_pts;
     if (framenum < 3)
         return;
     f = framenum-2;
-    while (get_frame_pts(f) + initial_pts > base_apts && f > 1) // Find first frame with samples available, could be incomplete
+    if (fabs(local_initial_pts) > 200)
+        local_initial_pts = 0;
+    while (get_frame_pts(f) + local_initial_pts > base_apts && f > 1) // Find first frame with samples available, could be incomplete
         f--;
-    while (f < framenum-1 && (get_frame_pts(f+1) + initial_pts )<= top_apts && (top_apts - base_apts) > .2 /* && get_frame_pts(f-1) >= base_apts */) {
-        volume = retreive_frame_volume(fmax(get_frame_pts(f) + initial_pts , base_apts), get_frame_pts(f+1) + initial_pts);
+    while (f < framenum-1 && (get_frame_pts(f+1) + local_initial_pts )<= top_apts && (top_apts - base_apts) > .2 /* && get_frame_pts(f-1) >= base_apts */) {
+        volume = retreive_frame_volume(fmax(get_frame_pts(f) + local_initial_pts , base_apts), get_frame_pts(f+1) + local_initial_pts);
         if (volume > -1) set_frame_volume(f, volume);
         f++;
     }
@@ -475,11 +507,11 @@ void sound_to_frames(VideoState *is, short **b, int s, int c, int format)
 
     audio_samples = (audio_buffer_ptr - audio_buffer);
 
-    if (old_sample_rate == is->audio_st->codec->sample_rate &&
+    if (old_sample_rate == is->audio_st->codecpar->sample_rate &&
         ((audio_buffer_ptr - audio_buffer) < 0 || (audio_buffer_ptr - audio_buffer) >= AUDIOBUFFER
-        || (top_apts - base_apts) * (is->audio_st->codec->sample_rate+0.5) > AUDIOBUFFER
+        || (top_apts - base_apts) * (is->audio_st->codecpar->sample_rate+0.5) > AUDIOBUFFER
         || (top_apts < base_apts)
-        || !ISSAME(((double)audio_samples /(double)(is->audio_st->codec->sample_rate+0.5))+ base_apts, top_apts)
+        || !ISSAME(((double)audio_samples /(double)(is->audio_st->codecpar->sample_rate+0.5))+ base_apts, top_apts)
         || audio_samples < 0
         || audio_samples >= AUDIOBUFFER)) {
        Debug(1, "Panic: Audio buffering corrupt\n");
@@ -495,15 +527,15 @@ void sound_to_frames(VideoState *is, short **b, int s, int c, int format)
     }
     audio_channels = c;
     old_c = c;
-    if (old_sample_rate != 0 && old_sample_rate != is->audio_st->codec->sample_rate) {
-         Debug(5, "Audio samplerate switched from %d to %d\n", old_sample_rate, is->audio_st->codec->sample_rate );
+    if (old_sample_rate != 0 && old_sample_rate != is->audio_st->codecpar->sample_rate) {
+         Debug(5, "Audio samplerate switched from %d to %d\n", old_sample_rate, is->audio_st->codecpar->sample_rate );
     }
-    old_sample_rate = is->audio_st->codec->sample_rate;
+    old_sample_rate = is->audio_st->codecpar->sample_rate;
 
     old_base_apts = base_apts;
-    if (fabs(base_apts - (is->audio_clock - ((double)audio_samples /(double)(is->audio_st->codec->sample_rate))))> 0.0001)
-        base_apts = (is->audio_clock - ((double)audio_samples /(double)(is->audio_st->codec->sample_rate)));
-        if (ALIGN_AC3_PACKETS && is->audio_st->codec->codec_id == AV_CODEC_ID_AC3) {
+    if (fabs(base_apts - (is->audio_clock - ((double)audio_samples /(double)(is->audio_st->codecpar->sample_rate))))> 0.0001)
+        base_apts = (is->audio_clock - ((double)audio_samples /(double)(is->audio_st->codecpar->sample_rate)));
+        if (ALIGN_AC3_PACKETS && is->audio_st->codecpar->codec_id == AV_CODEC_ID_AC3) {
                     if (   ISSAME(base_apts - old_base_apts, 0.032)
                         || ISSAME(base_apts - old_base_apts, -0.032)
                         || ISSAME(base_apts - old_base_apts, 0.064)
@@ -528,7 +560,7 @@ void sound_to_frames(VideoState *is, short **b, int s, int c, int format)
     {
         if (format == AV_SAMPLE_FMT_FLTP)
         {
-            for (l=0;l < is->audio_st->codec->channels;l++ )
+            for (l=0;l < is->audio_st->codecpar->channels;l++ )
             {
                 fb[l] = (float*)b[l];
             }
@@ -536,16 +568,16 @@ void sound_to_frames(VideoState *is, short **b, int s, int c, int format)
             {
                 volume = 0;
                 if (planar)
-                    for (l=0;l < is->audio_st->codec->channels;l++ ) volume += *((fb[l])++) * 64000;
+                    for (l=0;l < is->audio_st->codecpar->channels;l++ ) volume += *((fb[l])++) * 64000;
                 else
-                    for (l=0;l < is->audio_st->codec->channels;l++ ) volume += *((fb[0])++) * 64000;
-                *audio_buffer_ptr++ = volume / is->audio_st->codec->channels;
-                avg_volume += abs(volume / is->audio_st->codec->channels);
+                    for (l=0;l < is->audio_st->codecpar->channels;l++ ) volume += *((fb[0])++) * 64000;
+                *audio_buffer_ptr++ = volume / is->audio_st->codecpar->channels;
+                avg_volume += abs(volume / is->audio_st->codecpar->channels);
             }
         }
         else
         {
-            for (l=0;l < is->audio_st->codec->channels;l++ )
+            for (l=0;l < is->audio_st->codecpar->channels;l++ )
             {
                 sb[l] = (short*)b[l];
             }
@@ -553,17 +585,17 @@ void sound_to_frames(VideoState *is, short **b, int s, int c, int format)
             {
                 volume = 0;
                 if (planar)
-                    for (l=0;l < is->audio_st->codec->channels;l++ ) volume += *((sb[l])++);
+                    for (l=0;l < is->audio_st->codecpar->channels;l++ ) volume += *((sb[l])++);
                 else
-                    for (l=0;l < is->audio_st->codec->channels;l++ ) volume += *((sb[0])++);
-                *audio_buffer_ptr++ = volume / is->audio_st->codec->channels;
-                avg_volume += abs(volume / is->audio_st->codec->channels);
+                    for (l=0;l < is->audio_st->codecpar->channels;l++ ) volume += *((sb[0])++);
+                *audio_buffer_ptr++ = volume / is->audio_st->codecpar->channels;
+                avg_volume += abs(volume / is->audio_st->codecpar->channels);
             }
         }
     }
     avg_volume /= s;
     audio_samples = (audio_buffer_ptr - audio_buffer);
-    top_apts = base_apts + audio_samples / (double)(is->audio_st->codec->sample_rate);
+    top_apts = base_apts + audio_samples / (double)(is->audio_st->codecpar->sample_rate);
 
     calculated_delay = is->audio_clock - old_audio_clock;
     DUMP_TIMING("a frame", is->audio_clock, top_apts, base_apts, avg_volume,s);
@@ -586,7 +618,7 @@ void audio_packet_process(VideoState *is, AVPacket *pkt)
     int len1, data_size;
     uint8_t *pp;
     double prev_audio_clock;
-//    AC3DecodeContext *s = is->audio_st->codec->priv_data;
+//    AC3DecodeContext *s = is->audio_st->codecpar->priv_data;
     int      rps,ps;
     AVPacket *pkt_temp = &is->audio_pkt_temp;
 
@@ -601,7 +633,7 @@ void audio_packet_process(VideoState *is, AVPacket *pkt)
     pkt_temp->data = pkt->data;
     pkt_temp->size = pkt->size;
 
-    if ( !ALIGN_AC3_PACKETS && is->audio_st->codec->codec_id == AV_CODEC_ID_AC3
+    if ( !ALIGN_AC3_PACKETS && is->audio_st->codecpar->codec_id == AV_CODEC_ID_AC3
         && ((pkt_temp->data[0] != 0x0b || pkt_temp->data[1] != 0x77)))
     {
 //        Debug(1, "AC3 packet misaligned, audio decoding will fail\n");
@@ -614,7 +646,7 @@ void audio_packet_process(VideoState *is, AVPacket *pkt)
         ALIGN_AC3_PACKETS = 1;
     }
 
-    if (ALIGN_AC3_PACKETS && is->audio_st->codec->codec_id == AV_CODEC_ID_AC3) {
+    if (ALIGN_AC3_PACKETS && is->audio_st->codecpar->codec_id == AV_CODEC_ID_AC3) {
         if (ac3_packet_index + pkt_temp->size >= AC3_BUFFER_SIZE )
         {
             Debug(8,"AC3 sync error\n");
@@ -665,7 +697,7 @@ void audio_packet_process(VideoState *is, AVPacket *pkt)
     {
         prev_audio_clock = is->audio_clock;
         is->audio_clock = av_q2d(is->audio_st->time_base)*( pkt->pts -  (is->audio_st->start_time != AV_NOPTS_VALUE ? is->audio_st->start_time : 0)) - apts_offset;
-            if (ALIGN_AC3_PACKETS && is->audio_st->codec->codec_id == AV_CODEC_ID_AC3) {
+            if (ALIGN_AC3_PACKETS && is->audio_st->codecpar->codec_id == AV_CODEC_ID_AC3) {
                     if (   ISSAME(is->audio_clock - prev_audio_clock, 0.032)
                         || ISSAME(is->audio_clock - prev_audio_clock, -0.032)
                         || ISSAME(is->audio_clock - prev_audio_clock, 0.064)
@@ -696,31 +728,24 @@ void audio_packet_process(VideoState *is, AVPacket *pkt)
 
     initial_apts_set = 1;
 
+    len1 = avcodec_send_packet(is->audio_ctx, pkt_temp);
+
     //		fprintf(stderr, "sac = %f\n", is->audio_clock);
-    while(pkt_temp->size > 0)
+    while ((len1 = avcodec_receive_frame(is->audio_ctx, is->frame)) != AVERROR(EAGAIN))
     {
  //       data_size = STORAGE_SIZE;
+        got_frame = len1 >= 0;
 
-//        if (!is->frame)
-//        {
-            if (!(is->frame = av_frame_alloc()))
-                return;
- //       }
- //       else
- //           avcodec_get_frame_defaults(is->frame);
-
-        len1 = avcodec_decode_audio4(is->audio_st->codec, is->frame, &got_frame, pkt_temp);
-
-        if (prev_codec_id != -1 && (unsigned int)prev_codec_id != is->audio_st->codec->codec_id)
+        if (prev_codec_id != -1 && (unsigned int)prev_codec_id != is->audio_st->codecpar->codec_id)
         {
             Debug(2 ,"Audio format change\n");
         }
-        prev_codec_id = is->audio_st->codec->codec_id;
+        prev_codec_id = is->audio_st->codecpar->codec_id;
         if (len1 < 0  && !ALIGN_AC3_PACKETS)
         {
             /* if error, we skip the frame */
             pkt_temp->size = 0;
-            if (is->audio_st->codec->codec_id == AV_CODEC_ID_AC3) ac3_packet_index = 0;
+            if (is->audio_st->codecpar->codec_id == AV_CODEC_ID_AC3) ac3_packet_index = 0;
 
             break;
         }
@@ -750,10 +775,10 @@ void audio_packet_process(VideoState *is, AVPacket *pkt)
         }
         is->audio_clock += (double)data_size /
                            (is->frame->channels * is->frame->sample_rate * av_get_bytes_per_sample(is->frame->format));
-        av_frame_free(&(is->frame));
+        av_frame_unref(is->frame);
     }
 
-    if (ALIGN_AC3_PACKETS && is->audio_st->codec->codec_id == AV_CODEC_ID_AC3) {
+    if (ALIGN_AC3_PACKETS && is->audio_st->codecpar->codec_id == AV_CODEC_ID_AC3) {
         ps = 0;
         rps = (pkt_temp->data - ac3_packet);
         while (0 < ac3_packet_index - rps)
@@ -878,26 +903,26 @@ int SubmitFrame(AVStream        *video_st, AVFrame         *pFrame , double pts)
     }
 
 //	bitrate = pFrame->bit_rate;
-    if (pFrame->linesize[line] > 3840 || pFrame->height > 1200 || pFrame->linesize[line] < 100 || pFrame->height < 100)
+    if (pFrame->linesize[line] > MAXWIDTH || pFrame->height > MAXHEIGHT || pFrame->linesize[line] < 100 || pFrame->height < 100)
     {
         Debug(1, "Panic: illegal height (%d), width (%d) or frame period (%d)\n",
               pFrame->height, pFrame->width, pFrame->linesize[line]);
         frame_ptr = NULL;
         return(0);
     }
-    if (height != pFrame->height && pFrame->height > 100 && pFrame->height < 2000)
+    if (height != pFrame->height && pFrame->height > 100 && pFrame->height < MAXHEIGHT)
     {
         height= pFrame->height;
         changed = 1;
     }
-    if (width != pFrame->linesize[line] && pFrame->linesize[line] > 100 && pFrame->linesize[line]  < 3841)
+    if (width != pFrame->linesize[line] && pFrame->linesize[line] > 100 && pFrame->linesize[line]  < MAXWIDTH)
     {
         width= pFrame->linesize[line];
         changed = 1;
     }
-    if (videowidth != pFrame->width/(line==0 ? 1 : 2) && pFrame->width > 100 && pFrame->width < 2000)
+    if (videowidth != pFrame->width/(line==0 ? 1 : 2)  && pFrame->width > 100 && pFrame->width < MAXWIDTH)
     {
-        videowidth= pFrame->width/(line==0 ? 1 : 2);
+        videowidth= pFrame->width/(line==0 ? 1 : 2) ;
         changed = 1;
     }
     if (changed) Debug(5, "Format changed to [%d : %d]\n", videowidth, height);
@@ -1022,12 +1047,12 @@ again:
             error_text = "Generic";
         }
 
-        fprintf(stderr, "%s error while seeking. target=%6.3f, \"%s\"\n", error_text,is->seek_pts, is->pFormatCtx->filename);
+        fprintf(stderr, "%s error while seeking. target=%6.3f, \"%s\"\n", error_text,is->seek_pts, is->pFormatCtx->url);
 
         if (selftest)
         {
             sample_file = fopen("seektest.log", "a+");
-            fprintf(sample_file, "%s error while seeking, target=%6.3f, \"%s\"\n", error_text,is->seek_pts, is->pFormatCtx->filename);
+            fprintf(sample_file, "%s error while seeking, target=%6.3f, \"%s\"\n", error_text,is->seek_pts, is->pFormatCtx->url);
             fclose(sample_file);
         }
 
@@ -1042,11 +1067,11 @@ again:
     {
         if(is->audioStream >= 0)
         {
-            avcodec_flush_buffers(is->audio_st->codec);
+            avcodec_flush_buffers(is->audio_ctx);
         }
         if(is->videoStream >= 0)
         {
-            avcodec_flush_buffers(is->video_st->codec);
+            avcodec_flush_buffers(is->dec_ctx);
         }
     }
     is->seek_no_flush = 0;
@@ -1129,7 +1154,7 @@ nextpacket:
                     break;
                 }
 /*
-                double frame_delay = av_q2d(is->video_st->codec->time_base)* is->video_st->codec->ticks_per_frame;         // <------------------------ frame delay is the time in seconds till the next frame
+                double frame_delay = av_q2d(is->dec_ctxpar->time_base)* is->dec_ctxpar->ticks_per_frame;         // <------------------------ frame delay is the time in seconds till the next frame
                 if (is->video_clock - is->seek_pts > -frame_delay / 2.0)
                 {
                     av_packet_unref(packet);
@@ -1180,7 +1205,7 @@ extern char					mpegfilename[];
 int video_packet_process(VideoState *is,AVPacket *packet)
 {
     double frame_delay;
-    int len1, frameFinished;
+    int len1, frameFinished = 0;
     int repeat;
     double pts;
 //    double dts;
@@ -1206,11 +1231,10 @@ static int    prev_strange_framenum = 0;
     }
     real_pts = 0.0;
     pts = 0;
-    //is->video_st->codec.thread_type
-    if (!hardware_decode) is->video_st->codec->flags |= AV_CODEC_FLAG_GRAY;
+    //is->dec_ctx.thread_type
+    if (!hardware_decode) is->dec_ctx->flags |= AV_CODEC_FLAG_GRAY;
     // Decode video frame
-    len1 = avcodec_decode_video2(is->video_st->codec, is->pFrame, &frameFinished,
-                                 packet);
+    len1 = avcodec_send_packet(is->dec_ctx, packet);
 
     if (len1<0)
     {
@@ -1232,9 +1256,9 @@ static int    prev_strange_framenum = 0;
     }
 
     // Did we get a video frame?
-    if(frameFinished)
+    while ((len1 = avcodec_receive_frame(is->dec_ctx, is->pFrame)) >= 0)
     {
-
+        frameFinished = 1;
         // convert to 8bit
         if (is->pFrame->format == AV_PIX_FMT_YUV420P10LE) {
             is->img_convert_ctx = sws_getCachedContext(is->img_convert_ctx, is->pFrame->width, is->pFrame->height, is->pFrame->format, is->pFrame->width, is->pFrame->height, AV_PIX_FMT_YUV420P, SWS_POINT, NULL, NULL, NULL);
@@ -1249,13 +1273,24 @@ static int    prev_strange_framenum = 0;
             is->pFrame = newframe;
         }
 
-        frame_delay = av_q2d(is->video_st->codec->time_base) * is->video_st->codec->ticks_per_frame ;
+        if(is->dec_ctx->framerate.den && is->dec_ctx->framerate.num)
+        {
+            frame_delay = (1/ av_q2d(is->dec_ctx->framerate) ) /* * is->dec_ctx->ticks_per_frame */ ;
+        }
+        else
+        {
+           frame_delay = av_q2d(is->dec_ctx->time_base) * is->dec_ctx->ticks_per_frame ;
+        }
+
+//        frame_delay = av_q2d(is->dec_ctx->time_base) * is->dec_ctx->ticks_per_frame ;
         repeat = av_stream_get_parser(is->video_st) ? av_stream_get_parser(is->video_st)->repeat_pict: 4;
 
  //       if (prev_frame_delay != 0.0 && frame_delay != prev_frame_delay)
  //           Debug(1, "Changing fps from %6.3f to %6.3f", 1.0/prev_frame_delay, 1.0/frame_delay);
         pev_best_effort_timestamp = best_effort_timestamp;
-        best_effort_timestamp = av_frame_get_best_effort_timestamp(is->pFrame);
+        if (use_cuvid)
+            is->pFrame->best_effort_timestamp = is->pFrame->pts;
+        best_effort_timestamp = is->pFrame->best_effort_timestamp;
         calculated_delay = (best_effort_timestamp - pev_best_effort_timestamp) * av_q2d(is->video_st->time_base);
 
         if (best_effort_timestamp == AV_NOPTS_VALUE)
@@ -1301,7 +1336,6 @@ static int    prev_strange_framenum = 0;
                 force_29fps = 1;
                 force_25fps = 0;
                 force_24fps = 0;
-                Debug(1 ,"Framerate forced to 29.97fps at frame %d\n", frame_count);
             }
 
             if ( (!(fabs(frame_delay - 0.040) < 0.001 )) &&
@@ -1316,7 +1350,6 @@ static int    prev_strange_framenum = 0;
                 force_29fps = 0;
                 force_25fps = 1;
                 force_24fps = 0;
-                Debug(1 ,"Framerate forced to 25.00fps at frame %d\n", frame_count);
             }
 
             if ( ((find_24fps & 1 ) == 0 && (fabs(calculated_delay - 0.050) < 0.001 )) ||
@@ -1332,44 +1365,49 @@ static int    prev_strange_framenum = 0;
                 force_29fps = 0;
                 force_25fps = 0;
                 force_24fps = 1;
-                Debug(1 ,"Framerate forced to 24.00fps at frame %d\n", frame_count);
             }
         }
 
-        if (force_29fps)
+        if (force_29fps && find_29fps == 5)
         {
             frame_delay=0.033366666666666669;
+            Debug(1 ,"Framerate forced %6.3f fps at frame %d\n", 1.0/frame_delay, frame_count);
+            set_fps(frame_delay);
         }
-        if (force_25fps)
+        if (force_25fps && find_25fps == 5)
         {
             frame_delay=0.04;
+            Debug(1 ,"Framerate forced %6.3f fps at frame %d\n", 1.0/frame_delay, frame_count);
+            set_fps(frame_delay);
         }
-        if (force_24fps)
+        if (force_24fps && find_24fps == 5)
         {
             frame_delay=0.0416666666666667;
+            Debug(1 ,"Framerate forced %6.3f fps at frame %d\n", 1.0/frame_delay, frame_count);
+            set_fps(frame_delay);
         }
 
 //#define SHOW_VIDEO_TIMING
 #ifdef SHOW_VIDEO_TIMING
         if (framenum==0)
-            Debug(1,"Video timing ---------------------------------------------------\n", frame_delay/is->video_st->codec->ticks_per_frame, is->video_st->codec->ticks_per_frame, repeat, real_pts,calculated_delay);
+            Debug(1,"Video timing ---------------------------------------------------\n", frame_delay/is->dec_ctx->ticks_per_frame, is->dec_ctx->ticks_per_frame, repeat, real_pts,calculated_delay);
         else if (framenum<20)
-            Debug(1,"Video timing fr=%6.5f, tick=%d, repeat=%d, pts=%6.3f, step=%6.5f\n", frame_delay/is->video_st->codec->ticks_per_frame, is->video_st->codec->ticks_per_frame, repeat, real_pts,calculated_delay);
+            Debug(1,"Video timing fr=%6.5f, tick=%d, repeat=%d, pts=%6.3f, step=%6.5f\n", frame_delay/is->dec_ctx->ticks_per_frame, is->dec_ctx->ticks_per_frame, repeat, real_pts,calculated_delay);
 #endif // SHOW_VIDEO_TIMING
 
 
         pts_offset *= 0.9;
         if (!reviewing && timeline_repair) {
             if (framenum > 1 && fabs(calculated_delay - pts_offset - frame_delay) < 1.0) { // Allow max 0.5 second timeline jitter to be compensated
-                if (!ISSAME(3*frame_delay/ is->video_st->codec->ticks_per_frame, calculated_delay))
-                    if (!ISSAME(1*frame_delay/ is->video_st->codec->ticks_per_frame, calculated_delay))
+                if (!ISSAME(3*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay))
+                    if (!ISSAME(1*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay))
                         pts_offset = pts_offset + frame_delay - calculated_delay;
             }
         }
         else
             do_audio_repair = 0;
 
-//		Debug(0 ,"pst[%3d] = %12.3f, inter = %d, ticks = %d\n", framenum, pts/frame_delay, is->pFrame->interlaced_frame, is->video_st->codec->ticks_per_frame);
+//		Debug(0 ,"pst[%3d] = %12.3f, inter = %d, ticks = %d\n", framenum, pts/frame_delay, is->pFrame->interlaced_frame, is->dec_ctxpar->ticks_per_frame);
 
         pts = real_pts + pts_offset;
 
@@ -1377,11 +1415,12 @@ static int    prev_strange_framenum = 0;
 
         if (!reviewing
             && framenum > 1 && fabs(calculated_delay - frame_delay) > 0.01
-            && !ISSAME(3*frame_delay/ is->video_st->codec->ticks_per_frame, calculated_delay)
-            && !ISSAME(1*frame_delay/ is->video_st->codec->ticks_per_frame, calculated_delay)
+            && !ISSAME(3*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay)
+            && !ISSAME(2*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay)
+            && !ISSAME(1*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay)
             ){
             if ( (prev_strange_framenum + 1 != framenum) &&( prev_strange_step < fabs(calculated_delay - frame_delay))) {
-                Debug(8 ,"Strange video pts step of %6.5f instead of %6.5f at frame %d\n", calculated_delay+0.0005, frame_delay+0.0005, framenum); // Unknown strange step
+                Debug(8 ,"Strange video pts step of %6.5f instead of %6.5f at frame %d\n", calculated_delay+0.0000005, frame_delay+0.0000005, framenum); // Unknown strange step
                 if (calculated_delay < -0.5)
                     do_audio_repair = 0;        // Disable audio repair with messed up video timeline
             }
@@ -1389,7 +1428,7 @@ static int    prev_strange_framenum = 0;
             prev_strange_step = fabs(calculated_delay - frame_delay);
         }
 
-        set_fps(frame_delay, is->fps, repeat, av_q2d(is->video_st->r_frame_rate),  av_q2d(is->video_st->avg_frame_rate));
+        // set_fps(calculated_delay, is->fps, repeat, av_q2d(is->video_st->r_frame_rate),  av_q2d(is->video_st->avg_frame_rate));
 
         if(pts != 0)
         {
@@ -1537,9 +1576,9 @@ static int    prev_strange_framenum = 0;
             }
         }
 #endif
-
-        return 1;
     }
+
+    return frameFinished;
 quit:
     return 0;
 }
@@ -1572,7 +1611,7 @@ static enum AVPixelFormat get_format(AVCodecContext *s, const enum AVPixelFormat
 
         hwaccel = get_hwaccel(*p);
         if (!hwaccel ||
-            (ist->active_hwaccel_id && ist->active_hwaccel_id != hwaccel->id) ||
+  //          (ist->active_hwaccel_id && ist->active_hwaccel_id != hwaccel->id) ||
             (ist->hwaccel_id != HWACCEL_AUTO && ist->hwaccel_id != hwaccel->id))
             continue;
 
@@ -1587,7 +1626,7 @@ static enum AVPixelFormat get_format(AVCodecContext *s, const enum AVPixelFormat
             }
             continue;
         }
-        ist->active_hwaccel_id = hwaccel->id;
+//        ist->active_hwaccel_id = hwaccel->id;
         ist->hwaccel_pix_fmt   = *p;
         break;
     }
@@ -1608,10 +1647,12 @@ static int get_buffer(AVCodecContext *s, AVFrame *frame, int flags)
 
 int stream_component_open(VideoState *is, int stream_index)
 {
-
     AVFormatContext *pFormatCtx = is->pFormatCtx;
+    AVCodecParameters *codecPar = NULL;
     AVCodecContext *codecCtx;
-    AVCodec *codec;
+    const AVCodec *codec;
+    const AVCodec *codec_hw = NULL;
+
 
 
     if(stream_index < 0 || (unsigned int)stream_index >= pFormatCtx->nb_streams)
@@ -1624,8 +1665,50 @@ int stream_component_open(VideoState *is, int stream_index)
 
     // Get a pointer to the codec context for the video stream
 
-    codecCtx = pFormatCtx->streams[stream_index]->codec;
-    avcodec_close(codecCtx);
+    codecPar = pFormatCtx->streams[stream_index]->codecpar;
+
+	codec = avcodec_find_decoder(codecPar->codec_id);
+
+    if (use_dxva2 && !codec_hw) {
+		if (codecPar->codec_id == AV_CODEC_ID_MPEG2VIDEO) codec_hw = avcodec_find_decoder_by_name("mpeg2_dxva2");
+		if (codecPar->codec_id == AV_CODEC_ID_H264) codec_hw = avcodec_find_decoder_by_name("h264_dxva2");
+		if (codecPar->codec_id == AV_CODEC_ID_MPEG4) codec_hw = avcodec_find_decoder_by_name("mpeg4_dxva2");
+		if (codecPar->codec_id == AV_CODEC_ID_VC1) codec_hw = avcodec_find_decoder_by_name("vc1_dxva2");
+		if (codecPar->codec_id == AV_CODEC_ID_HEVC) codec_hw = avcodec_find_decoder_by_name("hevc_dxva2");
+    }
+
+    if (use_vdpau && !codec_hw) {
+		if (codecPar->codec_id == AV_CODEC_ID_MPEG2VIDEO) codec_hw = avcodec_find_decoder_by_name("mpeg2_vdpau");
+		if (codecPar->codec_id == AV_CODEC_ID_H264) codec_hw = avcodec_find_decoder_by_name("h264_vdpau");
+		if (codecPar->codec_id == AV_CODEC_ID_MPEG4) codec_hw = avcodec_find_decoder_by_name("mpeg4_vdpau");
+		if (codecPar->codec_id == AV_CODEC_ID_VC1) codec_hw = avcodec_find_decoder_by_name("vc1_vdpau");
+		if (codecPar->codec_id == AV_CODEC_ID_HEVC) codec_hw = avcodec_find_decoder_by_name("hevc_vdpau");
+    }
+
+    if (use_cuvid && !codec_hw) {
+		if (codecPar->codec_id == AV_CODEC_ID_MPEG2VIDEO) codec_hw = avcodec_find_decoder_by_name("mpeg2_cuvid");
+		if (codecPar->codec_id == AV_CODEC_ID_H264) codec_hw = avcodec_find_decoder_by_name("h264_cuvid");
+		if (codecPar->codec_id == AV_CODEC_ID_HEVC) codec_hw = avcodec_find_decoder_by_name("hevc_cuvid");
+		if (codecPar->codec_id == AV_CODEC_ID_MPEG4) codec_hw = avcodec_find_decoder_by_name("mpeg4_cuvid");
+		if (codecPar->codec_id == AV_CODEC_ID_VC1) codec_hw = avcodec_find_decoder_by_name("vc1_cuvidl");
+    }
+
+	// If decoding in hardware try if running on a Raspberry Pi and then use it's decoder instead.
+    if (hardware_decode && !codec_hw) {
+		if (codecPar->codec_id == AV_CODEC_ID_MPEG2VIDEO) codec_hw = avcodec_find_decoder_by_name("mpeg2_mmal");
+		if (codecPar->codec_id == AV_CODEC_ID_H264) codec_hw = avcodec_find_decoder_by_name("h264_mmal");
+		if (codecPar->codec_id == AV_CODEC_ID_MPEG4) codec_hw = avcodec_find_decoder_by_name("mpeg4_mmal");
+		if (codecPar->codec_id == AV_CODEC_ID_VC1) codec_hw = avcodec_find_decoder_by_name("vc1_mmal");
+    }
+
+
+    if (codec_hw != NULL && codec_hw != codec) {
+        fprintf(stderr, "Using Codec: %s instead of %s\n", codec_hw->name, codec->name);
+        codec = codec_hw;
+    }
+
+    codecCtx = avcodec_alloc_context3(codec);
+    avcodec_parameters_to_context(codecCtx, codecPar);
 
     if (codecCtx->codec_type == AVMEDIA_TYPE_VIDEO)
     {
@@ -1695,17 +1778,6 @@ int stream_component_open(VideoState *is, int stream_index)
         }
     }
 
-
-	codec = avcodec_find_decoder(codecCtx->codec_id);
-
-	// If decoding in hardware try if running on a Raspberry Pi and then use it's decoder instead.
-    if (hardware_decode) {
-		if (codecCtx->codec_id == AV_CODEC_ID_MPEG2VIDEO && avcodec_find_decoder_by_name("mpeg2_mmal") != NULL) codec = avcodec_find_decoder_by_name("mpeg2_mmal");
-		if (codecCtx->codec_id == AV_CODEC_ID_H264 && avcodec_find_decoder_by_name("h264_mmal") != NULL) codec = avcodec_find_decoder_by_name("h264_mmal");
-		if (codecCtx->codec_id == AV_CODEC_ID_MPEG4 && avcodec_find_decoder_by_name("mpeg4_mmal") != NULL) codec = avcodec_find_decoder_by_name("mpeg4_mmal");
-		if (codecCtx->codec_id == AV_CODEC_ID_VC1 && avcodec_find_decoder_by_name("vc1_mmal") != NULL) codec = avcodec_find_decoder_by_name("vc1_mmal");
-    }
-
     if (!hardware_decode) av_dict_set_int(&myoptions, "gray", 1, 0);
 
 
@@ -1724,12 +1796,14 @@ int stream_component_open(VideoState *is, int stream_index)
     case AVMEDIA_TYPE_SUBTITLE:
         is->subtitleStream = stream_index;
         is->subtitle_st = pFormatCtx->streams[stream_index];
+        is->subtitle_ctx = codecCtx;
         if (demux_pid)
             selected_subtitle_pid = is->subtitle_st->id;
         break;
     case AVMEDIA_TYPE_AUDIO:
         is->audioStream = stream_index;
         is->audio_st = pFormatCtx->streams[stream_index];
+        is->audio_ctx = codecCtx;
 //          is->audio_buf_size = 0;
 //          is->audio_buf_index = 0;
 
@@ -1747,6 +1821,7 @@ int stream_component_open(VideoState *is, int stream_index)
     case AVMEDIA_TYPE_VIDEO:
         is->videoStream = stream_index;
         is->video_st = pFormatCtx->streams[stream_index];
+        is->dec_ctx = codecCtx;
 
 //          is->frame_timer = (double)av_gettime() / 1000000.0;
 //          is->frame_last_delay = 40e-3;
@@ -1755,7 +1830,7 @@ int stream_component_open(VideoState *is, int stream_index)
         is->pFrame = av_frame_alloc();
         if (!hardware_decode) codecCtx->flags |= AV_CODEC_FLAG_GRAY;
 //       codecCtx->thread_type = 1; // Frame based threading
-        codecCtx->lowres = min(av_codec_get_max_lowres(codecCtx->codec),lowres);
+        codecCtx->lowres = min(codecCtx->codec->max_lowres, lowres);
         if (codecCtx->codec_id == AV_CODEC_ID_H264)
         {
             is_h264 = 1;
@@ -1774,7 +1849,7 @@ int stream_component_open(VideoState *is, int stream_index)
 #endif
         }
         if (codecCtx->codec_id == AV_CODEC_ID_MPEG1VIDEO)
-            is->video_st->codec->ticks_per_frame = 1;
+            is->dec_ctx->ticks_per_frame = 1;
         if (demux_pid)
             selected_video_pid = is->video_st->id;
         /*
@@ -1857,9 +1932,6 @@ void file_open()
         av_log_set_callback(log_callback_report);
 
         av_log_set_flags(AV_LOG_SKIP_REPEATED);
-        avcodec_register_all();
-//    avfilter_register_all();
-        av_register_all();
         avformat_network_init();
         global_video_state = is;
         is->videoStream=-1;
@@ -1927,6 +1999,11 @@ again:
         if (retries == 0) av_dump_format(is->pFormatCtx, 0, is->filename, 0);
     }
 
+    if (!is->frame) {
+        if (!(is->frame = av_frame_alloc()))
+            exit(-1);
+    }
+
     if ( is->videoStream == -1)
     {
         video_index = av_find_best_stream(is->pFormatCtx, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
@@ -1958,8 +2035,10 @@ again:
         }
         else
         {
-            is->fps = 1/av_q2d(is->video_st->codec->time_base);
+            Debug(10, "Warning, no stream frame rate, deriving from codec\n");
+            is->fps = 1/(av_q2d(is->dec_ctx->time_base) * is->dec_ctx->ticks_per_frame );
         }
+        set_fps( 1.0 / is->fps);
 //        Debug(1, "Stream frame rate is %5.3f f/s\n", is->fps);
 
 
@@ -2030,13 +2109,13 @@ void file_close()
 //    av_freep(&ist->hwaccel_device);
 
 
-    if (is->videoStream != -1) avcodec_close(is->pFormatCtx->streams[is->videoStream]->codec);
+    if (is->dec_ctx) avcodec_free_context(&is->dec_ctx);
     is->videoStream = -1;
 //    avcodec_free_context(&is->pFormatCtx->streams[is->videoStream]->codec);
 
-    if (is->audioStream != -1) avcodec_close(is->pFormatCtx->streams[is->audioStream]->codec);
+    if (is->audio_ctx) avcodec_free_context(&is->audio_ctx);
     is->audioStream = -1;
-    if (is->subtitleStream != -1)  avcodec_close(is->pFormatCtx->streams[is->subtitleStream]->codec);
+    if (is->subtitle_ctx)  avcodec_free_context(&is->subtitle_ctx);
     is->subtitleStream = -1;
 //    is->pFormatCtx = NULL;
 
@@ -2331,7 +2410,7 @@ nextpacket:
 
                     if ((live_tv && retries < live_tv_retries) /* || (selftest == 3 && retries == 0) */)
                     {
-                        double frame_delay = av_q2d(is->video_st->codec->time_base) * is->video_st->codec->ticks_per_frame;
+                        double frame_delay = av_q2d(is->dec_ctx->time_base) * is->dec_ctx->ticks_per_frame;
 //                    uint64_t retry_target;
                         if (retries == 0)
                         {
@@ -2486,7 +2565,7 @@ nextpacket:
                     output_timing = 0;
                 }
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(HAVE_SDL)
                 while(1)
                 {
                     ReviewResult();

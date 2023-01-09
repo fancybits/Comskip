@@ -39,10 +39,23 @@ $ make
 
 #### Windows
 
-There are many ways to setup a build system on Windows. These instructions use MSYS2 and MinGW-w64, but other environments should also work:
+There are many ways to setup a build system on Windows.
+
+##### Cross Compile with Ubuntu Bionic (18.04) with MinGW-w64
+
+```
+$ sudo apt-get install -y subversion curl texinfo g++ bison flex cvs yasm automake libtool autoconf gcc cmake git make pkg-config zlib1g-dev mercurial unzip pax nasm gperf autogen bzip2
+$ git clone https://github.com/erikkaashoek/Comskip.git
+$ cd Comskip
+$ ./cross_compile_comskip.sh
+```
+
+##### MSYS2 and MinGW-w64
+
+These instructions use MSYS2 and MinGW-w64, but other environments should also work:
 
 - Install MSYS2 by following the instructions at https://msys2.github.io/
-- Install the essential build tools: `pacman -S mingw-w64-i686-gcc autoconf automake libtool pkgconfig yasm`
+- Install the essential build tools: `pacman -S mingw-w64-i686-gcc gcc make autoconf automake libtool pkgconfig yasm`
 - Close the MSYS2 shell and launch a MinGW-w64 shell; this is the shell you'll use for all builds
 - Build FFmpeg (http://ffmpeg.org/), argtable2 (http://argtable.sourceforge.net/) and SDL2 from source and install them to /usr/local
 - Add /usr/local/lib/pkg-config to PKG_CONFIG_PATH (e.g., add `export PKG_CONFIG_PATH=$PKG_CONFIG_PATH:/usr/local/lib/pkgconfig` to ~/.bashrc, then type `source ~/.bashrc`)

@@ -73,8 +73,8 @@ int xPos,yPos,lMouseDown;
  * DirectDraw GUIDs.
  * Defining them here allows us to get rid of the dxguid library during link.
  */
-//DEFINE_GUID (IID_IDirectDraw2, 0xB3A6F3E0,0x2B43,0x11CF,0xA2,0xDE,0x00,0xAA,0x00,0xB9,0x33,0x56);
-//DEFINE_GUID (IID_IDirectDrawSurface2, 0x57805885,0x6eec,0x11cf,0x94,0x41,0xa8,0x23,0x03,0xc1,0x0e,0x27);
+DEFINE_GUID (IID_IDirectDraw2, 0xB3A6F3E0,0x2B43,0x11CF,0xA2,0xDE,0x00,0xAA,0x00,0xB9,0x33,0x56);
+DEFINE_GUID (IID_IDirectDrawSurface2, 0x57805885,0x6eec,0x11cf,0x94,0x41,0xa8,0x23,0x03,0xc1,0x0e,0x27);
 
 #define FOURCC_YV12 0x32315659
 
@@ -329,7 +329,7 @@ static long FAR PASCAL event_procedure (HWND hwnd, UINT message,
      switch (message) {
      case WM_COMMAND:
           wmId    = LOWORD(wParam);
-          wmEvent = HIWORD(wParam);
+          //wmEvent = HIWORD(wParam);
           // Parse the menu selections:
           switch (wmId) {
           case IDM_ABOUT:
@@ -541,7 +541,7 @@ static int create_window (dx_instance_t * instance)
      /* store a directx_instance pointer into the window local storage
       * (for later use in event_handler).
       * We need to use SetWindowLongPtr when it is available in mingw */
-     SetWindowLongPtr (instance->window, GWLP_USERDATA, (LONG) instance);
+     SetWindowLongPtr (instance->window, GWLP_USERDATA, instance);
      SetWindowPos(instance->window, HWND_TOP, 100, 0, 0, 0, SWP_SHOWWINDOW|SWP_NOSIZE);
 
      ShowWindow (instance->window, SW_SHOW);
