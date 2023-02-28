@@ -1306,6 +1306,9 @@ static int    prev_strange_framenum = 0;
                     Debug( 10,"\nInitial video pts = %10.3f\n", initial_pts);
 //                    if (timeline_repair<2)
 //                        initial_pts = 0.0;
+                    if (is->video_st->start_time != AV_NOPTS_VALUE && is->pFormatCtx->start_time != AV_NOPTS_VALUE) {
+                        Debug( 10,"Initial video offset = %10.3f (video start = %.3f, format start = %.3f)\n\n", is->video_st->start_time * av_q2d(is->video_st->time_base) - is->pFormatCtx->start_time * av_q2d(AV_TIME_BASE_Q) + initial_pts, is->video_st->start_time * av_q2d(is->video_st->time_base), is->pFormatCtx->start_time * av_q2d(AV_TIME_BASE_Q));
+                    }
                 }
                 initial_pts_set++;
                 final_pts = 0;
