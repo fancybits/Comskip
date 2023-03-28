@@ -37,6 +37,9 @@
 int __vaDriverInit_iHD(void *ctx) {
     return -1;
 }
+int __vaDriverInit_i915(void *ctx) {
+    return -1;
+}
 
 // Define detection methods
 #define BLACK_FRAME		1
@@ -833,7 +836,7 @@ unsigned char cvert_edgemask[MAXHEIGHT*MAXWIDTH];
 int					play_nice_start = -1;
 int					play_nice_end = -1;
 long				play_nice_sleep = 2L;
-FILE *dump_data_file = (FILE *)NULL;
+FILE *dump_data_file = NULL;
 uint8_t				ccData[500];
 int					ccDataLen;
 static uint8_t	    prevccData[500];
