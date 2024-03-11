@@ -25,6 +25,9 @@ AM_CONDITIONAL([PLATFORM_WIN32], [test "x$platform_win32" = "xyes"])
 AC_MSG_CHECKING([whether host is darwin])
 AC_MSG_RESULT([$platform_darwin])
 
+AC_CHECK_LIB([backtrace], [backtrace_print], [have_libbacktrace=yes], [have_libbacktrace=no])
+AM_CONDITIONAL([HAVE_LIBBACKTRACE], [test "x$have_libbacktrace" = "xyes"])
+
 AC_ARG_ENABLE([donator], [AS_HELP_STRING([--disable-donator], [build without donator features])])
 AC_MSG_CHECKING([whether to enable donator features])
 AS_IF([test "x${enable_donator}" = "xno"], AC_MSG_RESULT([no]), AC_MSG_RESULT([yes]))

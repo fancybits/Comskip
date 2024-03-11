@@ -31,6 +31,8 @@
 #include <argtable2.h>
 #define SELFTEST
 
+#include "stacktrace.h"
+
 int pass = 0;
 double test_pts = 0.0;
 
@@ -2157,6 +2159,8 @@ int main (int argc, char ** argv)
     int64_t last_packet_pos = 0;
     int64_t last_packet_pts = 0;
     double retry_target = 0.0;
+
+    install_crash_handler();
 
 #ifdef SELFTEST
     //int tries = 0;

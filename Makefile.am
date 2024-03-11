@@ -11,7 +11,8 @@ base_sources = comskip.c comskip.h mpeg2dec.c platform.c platform.h video_out_dx
     ccextratorwin/ccextractor.c ccextratorwin/ccextractor.h \
     ccextratorwin/encoding.c \
     ccextratorwin/general_loop.c \
-    ccextratorwin/myth.c
+    ccextratorwin/myth.c \
+    stacktrace.c stacktrace.h
 
 comskip_SOURCES = $(base_sources)
 comskip_gui_SOURCES = $(base_sources) video_out_sdl.c
@@ -24,7 +25,15 @@ endif
 
 if PLATFORM_WIN32
     PLATFORM_LIBS = -lcomdlg32 -lgdi32
+else
+    PLATFORM_LIBS = -ldl
 endif
+
+if HAVE_LIBBACKTRACE
+    PLATFORM_LIBS += -lbacktrace
+    DEFINES += -DHAVE_LIBBACKTRACE=1
+endif
+
 
 comskip_CPPFLAGS = -Wall $(argtable2_CFLAGS) $(ffmpeg_CFLAGS) $(DEFINES)
 comskip_LDADD = $(argtable2_LIBS) $(ffmpeg_LIBS) $(PLATFORM_LIBS)

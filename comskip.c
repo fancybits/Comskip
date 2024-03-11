@@ -32,6 +32,7 @@
 #endif
 
 #include "comskip.h"
+#include "stacktrace.h"
 
 // dummy init relys on improper linkage of iHD driver without whole-archive
 int __vaDriverInit_iHD(void *ctx) {
@@ -983,7 +984,7 @@ int					FindBlackThreshold(double percentile);
 int					FindUniformThreshold(double percentile);
 void				OutputFrameArray(bool screenOnly);
 void                OutputBlackArray();
-void				OutputFrame();
+void				OutputFrame(int frame_number);
 void				OpenOutputFiles();
 void				InitializeFrameArray(long i);
 void				InitializeBlackArray(long i);
@@ -8783,6 +8784,7 @@ FILE* LoadSettings(int argc, char ** argv)
     struct arg_file*	cl_work					= arg_filen(NULL, "output", NULL, 0, 1, "Folder to use for all output files");
     struct arg_file*	cl_work_fname		= arg_filen(NULL, "output-filename", NULL, 0, 1, "Filename base to use for all output files");
     struct arg_int*	cl_selftest					= arg_intn(NULL, "selftest", NULL, 0, 1, "Execute a selftest");
+    struct arg_lit*     cl_crash                = arg_lit0(NULL, "crash", "Crash the program");
     struct arg_file*	in						= arg_filen(NULL, NULL, NULL, 1, 1, "Input file");
     struct arg_file*	out						= arg_filen(NULL, NULL, NULL, 0, 1, "Output folder for cutlist");
     struct arg_end*		end						= arg_end(20);
@@ -8820,6 +8822,7 @@ FILE* LoadSettings(int argc, char ** argv)
         cl_work,
         cl_work_fname,
         cl_selftest,
+        cl_crash,
         in,
         out,
         end
@@ -9557,6 +9560,13 @@ static        char *CEW_argv[10];
         output_framearray = false;
         ProcessCSV(in_file);
         output_debugwindow = false;
+    }
+
+    if (cl_crash->count)
+    {
+        printf("Crashing the program as per command line.\n");
+        crash();
+        exit(1);
     }
 
 
