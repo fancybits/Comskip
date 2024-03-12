@@ -8,7 +8,11 @@
 #include <backtrace.h>
 
 void crash_handler(int signum) {
+#ifdef WIN32
+    fprintf(stderr, "Received signal %d\n", signum);
+#else
     fprintf(stderr, "Received signal %d (%s)\n", signum, strsignal(signum));
+#endif
 
     struct backtrace_state *s = backtrace_create_state(NULL, 0, NULL, NULL);
 
