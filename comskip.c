@@ -2712,7 +2712,7 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
     }
     if (key == 27)
     {
-        exit(1);
+        exit(10);
     }
     if (key == 'G')
     {
@@ -2752,7 +2752,7 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
             vo_draw(graph);
         if (key == 27)
         {
-            exit(1);
+            exit(10);
         }
         if (key == 'G')
         {
@@ -9566,7 +9566,7 @@ static        char *CEW_argv[10];
     {
         printf("Crashing the program as per command line.\n");
         crash();
-        exit(1);
+        exit(10);
     }
 
 
@@ -10156,7 +10156,7 @@ again:
 #ifdef DEBUG_HERE_BRIGHT_MEM
             if (hereBright >= OWN_HISTOGRAM_HEIGHT) {
             	printf("Error, invalid here bright %i >= %i", hereBright, OWN_HISTOGRAM_HEIGHT);
-            	exit(1);
+		exit(10);
             }
 #endif
             own_histogram[0][hereBright]++;
@@ -10212,7 +10212,7 @@ again:
 #ifdef DEBUG_HERE_BRIGHT_MEM
             if (hereBright >= OWN_HISTOGRAM_HEIGHT) {
             	printf("Error, invalid here bright %i >= %i", hereBright, OWN_HISTOGRAM_HEIGHT);
-            	exit(1);
+		exit(10);
             }
 #endif
             own_histogram[1][hereBright]++;
@@ -10268,7 +10268,7 @@ again:
 #ifdef DEBUG_HERE_BRIGHT_MEM
             if (hereBright >= OWN_HISTOGRAM_HEIGHT) {
             	printf("Error, invalid here bright %i >= %i", hereBright, OWN_HISTOGRAM_HEIGHT);
-            	exit(1);
+		exit(10);
             }
 #endif
             own_histogram[2][hereBright]++;
@@ -10324,7 +10324,7 @@ again:
 #ifdef DEBUG_HERE_BRIGHT_MEM
             if (hereBright >= OWN_HISTOGRAM_HEIGHT) {
             	printf("Error, invalid here bright %i >= %i", hereBright, OWN_HISTOGRAM_HEIGHT);
-            	exit(1);
+		exit(10);
             }
 #endif
             own_histogram[3][hereBright]++;
@@ -12709,20 +12709,20 @@ void InitLogoBuffers(void)
     if (logoFrameNum == NULL)
     {
         Debug(0, "Could not allocate memory for logo buffer frame number array\n");
-        exit(14);
+        exit(40);
     }
     memset(logoFrameNum, 0,num_logo_buffers*sizeof(int));
     /*
     	if(!choriz_edgemask) choriz_edgemask = malloc(width * height * sizeof(unsigned char));
     	if (choriz_edgemask == NULL) {
     		Debug(0, "Could not allocate memory for horizontal edgemask\n");
-    		exit(14);
+		exit(41);
     	}
 
     	if(!cvert_edgemask) cvert_edgemask = malloc(width * height * sizeof(unsigned char));
     	if (cvert_edgemask == NULL) {
     		Debug(0, "Could not allocate memory for vertical edgemask\n");
-    		exit(15);
+		exit(42);
     	}
     */
     if(!logoFrameBuffer)
@@ -12740,14 +12740,14 @@ void InitLogoBuffers(void)
                 if (logoFrameBuffer[i] == NULL)
                 {
                     Debug(0, "Could not allocate memory for logo frame buffer %i\n", i);
-                    exit(16);
+                    exit(43);
                 }
             }
         }
         else
         {
             Debug(0, "Could not allocate memory for logo frame buffers\n");
-            exit(16);
+            exit(44);
         }
     }
 #if MULTI_EDGE_BUFFER
@@ -12763,14 +12763,14 @@ void InitLogoBuffers(void)
                 if (horiz_edges[i] == NULL)
                 {
                     Debug(0, "Could not allocate memory for horizontal edge buffer %i\n", i);
-                    exit(17);
+                    exit(45);
                 }
             }
         }
         else
         {
             Debug(0, "Could not allocate memory for horizontal edge buffers\n");
-            exit(18);
+            exit(46);
         }
     }
 #else
@@ -12778,7 +12778,7 @@ void InitLogoBuffers(void)
     	horiz_count = malloc(width * height * sizeof(unsigned char));
     	if (horiz_count == NULL) {
     		Debug(0, "Could not allocate memory for horizontal count buffer\n");
-    		exit(17);
+		exit(47);
     	}
     	memset(horiz_count, 0, width * height * sizeof(unsigned char));
     */
@@ -12796,14 +12796,14 @@ void InitLogoBuffers(void)
                 if (vert_edges[i] == NULL)
                 {
                     Debug(0, "Could not allocate memory for vertical edge buffer %i\n", i);
-                    exit(19);
+                    exit(48);
                 }
             }
         }
         else
         {
             Debug(0, "Could not allocate memory for vertical edge buffers\n");
-            exit(20);
+            exit(49);
         }
     }
 #else
@@ -12811,7 +12811,7 @@ void InitLogoBuffers(void)
     	vert_count = malloc(width * height * sizeof(unsigned char));
     	if (vert_count == NULL) {
     		Debug(0, "Could not allocate memory for vertical count buffer\n");
-    		exit(17);
+		exit(50);
     	}
     	memset(vert_count, 0, width * height * sizeof(unsigned char));
     */
@@ -12842,7 +12842,7 @@ void InitComSkip(void)
         if (frame == NULL)
         {
             Debug(0, "Could not allocate memory for frame array\n");
-            exit(10);
+            exit(51);
         }
     }
 
@@ -12855,7 +12855,7 @@ void InitComSkip(void)
     if (black == NULL)
     {
         Debug(0, "Could not allocate memory for black frame array\n");
-        exit(11);
+        exit(52);
     }
 //	} else {
 //		Debug(1, "ERROR: ComSkip cannot run without black frames.\n");
@@ -12872,7 +12872,7 @@ void InitComSkip(void)
         if (logo_block == NULL)
         {
             Debug(0, "Could not allocate memory for logo cblock array\n");
-            exit(13);
+            exit(53);
         }
 
 //		if (!logoInfoAvailable) {
@@ -12892,7 +12892,7 @@ void InitComSkip(void)
         if (schange == NULL)
         {
             Debug(0, "Could not allocate memory for scene change array\n");
-            exit(12);
+            exit(54);
         }
     }
 
@@ -12906,7 +12906,7 @@ void InitComSkip(void)
         if (cc_block == NULL)
         {
             Debug(0, "Could not allocate memory for cc blocks\n");
-            exit(22);
+            exit(55);
         }
 
         cc_block[0].start_frame = 0;
@@ -12946,7 +12946,7 @@ void InitComSkip(void)
         if (cc_text == NULL)
         {
             Debug(0, "Could not allocate memory for cc text groups\n");
-            exit(22);
+            exit(56);
         }
 
         cc_text[0].start_frame = 1;
@@ -12973,12 +12973,12 @@ void InitComSkip(void)
     if (ar_block == NULL)
     {
         Debug(0, "Could not allocate memory for aspect ratio block array\n");
-        exit(31);
+        exit(57);
     }
     if (ac_block == NULL)
     {
         Debug(0, "Could not allocate memory for audio channel block array\n");
-        exit(31);
+        exit(58);
     }
 //	}
 
@@ -13089,7 +13089,7 @@ double FindScoreThreshold(double percentile)
     if ((score == NULL) || (count == NULL) || (start == NULL) || (blocknr == NULL) || (percent == NULL))
     {
         Debug(1, "Could not allocate memory.  Exiting program.\n");
-        exit(21);
+        exit(59);
     }
 
     counter = 0;
@@ -13922,7 +13922,7 @@ void InitializeFrameArray(long i)
         if (frame == NULL)
         {
             Debug(0, "Failed to allocated space for the frame array, quitting \n");
-            exit(1);
+            exit(60);
         }
     }
 
@@ -13971,7 +13971,7 @@ void InitializeSchangeArray(long i)
         void *ptr = realloc(schange, (max_schange_count + 1) * sizeof(schange_info));
         if (ptr == NULL) {
             Debug(0, "Could not allocate memory for %i scene change frames.\n", max_schange_count);
-            exit(12);
+            exit(61);
         }
         schange = ptr;
         Debug(9, "Resizing scene change array to accommodate %i frames.\n", max_schange_count);
@@ -14193,7 +14193,7 @@ again:
                     f = strtol(split, NULL, 10);
                     if (f!= frame_count)
                     {
-                        Debug(0, "Shit!!!!\n");
+                        Debug(0, "frame count doesn't match CSV\n");
                         exit(23);
                     }
                     break;
@@ -14662,7 +14662,7 @@ void Init_XDS_block()
         if (XDS_block == NULL)
         {
             Debug(0, "Could not allocate memory for XDS blocks\n");
-            exit(22);
+            exit(62);
         }
         XDS_block_count = 0;
         XDS_block[XDS_block_count].frame = 0;
@@ -15947,7 +15947,7 @@ void BuildCommListAsYouGo(void)
         if (onTheFlyBlackFrame == NULL)
         {
             Debug(0, "Could not allocate memory for onTheFlyBlackFrame\n");
-            exit(8);
+            exit(63);
         }
 
 #ifdef OLD_LIVE_TV
@@ -16220,7 +16220,7 @@ void BuildCommListAsYouGo(void)
                     if (commercial_count >= MAX_COMMERCIALS)
                     {
                         Debug(0, "Insufficient memory to manage live_tv commercials\n");
-                        exit(8);
+                        exit(64);
                     }
                     commercial[commercial_count].start_frame = c_start[i] + padding*fps - remove_before*fps;
                     commercial[commercial_count].end_frame = c_end[i] - padding*fps + remove_after*fps;

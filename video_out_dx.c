@@ -337,7 +337,7 @@ static long FAR PASCAL event_procedure (HWND hwnd, UINT message,
                break;
           case IDM_EXIT:
                PostQuitMessage(0);
-               exit(1);
+               exit(10);
                break;
           default:
                return DefWindowProc (hwnd, message, wParam, lParam);

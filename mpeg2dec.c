@@ -956,7 +956,7 @@ int SubmitFrame(AVStream        *video_st, AVFrame         *pFrame , double pts)
         else
            Debug( 1,"\nSelftest 2 OK: Reset\n");
 
-        exit(1);
+        exit(10);
     }
 
     if (!reviewing)
@@ -1493,7 +1493,7 @@ static int    prev_strange_framenum = 0;
                     selftest = 3;
                     live_tv_retries = 1;
                     pass = 0;
-//                    exit(1);
+//                    exit(10);
                 }
 #endif
                 if (SubmitFrame (is->video_st, is->pFrame, is->video_clock))
@@ -1522,7 +1522,7 @@ static int    prev_strange_framenum = 0;
                     }
                     else
                         Debug( 1,"\nSelftest 3 OK: Reopen\n");
-                    exit(1);
+                    exit(10);
                 }
                 retries = 0;
                 if (SubmitFrame (is->video_st, is->pFrame, is->video_clock))
@@ -1544,14 +1544,14 @@ static int    prev_strange_framenum = 0;
                             is->filename);
                         fclose(sample_file);
                         Debug( 1,"\nSelftest %d FAILED\n", selftest);
-                        exit(1);
+                        exit(10);
                     }
                     goto quit;          //Temporary till the seek error is fixed.
                     retries = 0;
                     exit(-1);
                 }
             }
-//            if (selftest == 4) exit(1);
+//            if (selftest == 4) exit(10);
         }
         /* update the video clock */
         is->video_clock += frame_delay;
@@ -2394,7 +2394,7 @@ nextpacket:
                                 fprintf(sample_file, "\"%s\": reopen file failed, size=%8.1f, pts=%6.2f\n", is->filename, is->duration, is->video_clock );
                                 fclose(sample_file);
                                 Debug( 1,"\nSelftest %d FAILED\n", selftest);
-                                exit(1);
+                                exit(10);
                             }
                         }
                         else
@@ -2531,7 +2531,7 @@ nextpacket:
              */
             selftest = 3;
             pass = 0;
-            //exit(1);
+            //exit(10);
         }
 
 
