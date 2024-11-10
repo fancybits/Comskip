@@ -541,7 +541,7 @@ static int create_window (dx_instance_t * instance)
      /* store a directx_instance pointer into the window local storage
       * (for later use in event_handler).
       * We need to use SetWindowLongPtr when it is available in mingw */
-     SetWindowLongPtr (instance->window, GWLP_USERDATA, instance);
+     SetWindowLongPtr (instance->window, GWLP_USERDATA, (LONG_PTR)instance);
      SetWindowPos(instance->window, HWND_TOP, 100, 0, 0, 0, SWP_SHOWWINDOW|SWP_NOSIZE);
 
      ShowWindow (instance->window, SW_SHOW);
