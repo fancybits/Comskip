@@ -25,6 +25,7 @@ endif
 
 if PLATFORM_WIN32
     PLATFORM_LIBS = -lcomdlg32 -lgdi32
+    comskip_SOURCES += win32_pthread.c
 else
     PLATFORM_LIBS = -ldl
 endif
