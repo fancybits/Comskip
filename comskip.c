@@ -14690,7 +14690,8 @@ void Add_XDS_block()
 }
 
 
-unsigned char XDSbuffer[40][100];
+#define MAXXDS 40
+unsigned char XDSbuffer[MAXXDS][100];
 int lastXDS = 0;
 int firstXDS = 1;
 int startXDS = 1;
@@ -14779,9 +14780,11 @@ void AddXDS(unsigned char hi, unsigned char lo)
                 XDSbuffer[i][j] = XDSbuf[j];
                 j++;
             }
-            newXDS = 1;
-            lastXDS++;
-            i++;
+            if (lastXDS < MAXXDS - 1) {
+                newXDS = 1;
+                lastXDS++;
+                i++;
+            }
         }
         firstXDS = 0;
         if (newXDS)
