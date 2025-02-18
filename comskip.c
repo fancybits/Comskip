@@ -16,6 +16,7 @@
 #include "platform.h"
 #include "vo.h"
 #include <argtable2.h>
+#include <pthread.h>
 
 
 #include <libavformat/avformat.h>
@@ -476,6 +477,7 @@ int                     hardware_decode = 0;
 int                     use_cuvid = 0;
 int                     use_vdpau = 0;
 int                     use_dxva2 = 0;
+int                     use_qsv = 0;
 int						skip_B_frames = 0;
 int						lowres = 0;
 bool					live_tv = false;
@@ -741,9 +743,9 @@ int					sceneChangePercent;
 bool				lastFrameWasBlack = false;
 bool				lastFrameWasSceneChange = false;
 
-#include <libavutil/avutil.h>  // only for DECLARE_ALIGNED
-static DECLARE_ALIGNED(32, long, histogram)[256];
-static DECLARE_ALIGNED(32, long, lastHistogram)[256];
+
+static long histogram[256];
+static long lastHistogram[256];
 
 #define				MAXCSLENGTH		400*300
 #define				MAXCUTSCENES	8
@@ -3328,7 +3330,7 @@ int DetectCommercials(int f, double pts)
         {
             if (delay_logo_search == 0 ||
                     (delay_logo_search == 1 && F2T(frame_count) > added_recording * 60) ||
-                    (F2T(frame_count) > delay_logo_search))
+                    (delay_logo_search > 1 && F2T(frame_count) > delay_logo_search))
             {
                 FillLogoBuffer();
                 if (logoBuffersFull)
@@ -8775,6 +8777,7 @@ FILE* LoadSettings(int argc, char ** argv)
     struct arg_lit*		cl_use_cuvid			= arg_lit0(NULL, "cuvid", "Use NVIDIA Video Decoder (CUVID), if available");
     struct arg_lit*		cl_use_vdpau			= arg_lit0(NULL, "vdpau", "Use NVIDIA Video Decode and Presentation API (VDPAU), if available");
     struct arg_lit*		cl_use_dxva2			= arg_lit0(NULL, "dxva2", "Use DXVA2 Video Decode and Presentation API (DXVA2), if available");
+    struct arg_lit*		cl_use_qsv				= arg_lit0(NULL, "qsv", "Use Intel Quick Sync Video acceleration (QSV), if available");
     struct arg_lit*		cl_list_decoders		= arg_lit0(NULL, "decoders", "List all decoders and exit");
     struct arg_int*		cl_threads				= arg_int0(NULL, "threads", "<int>", "The number of threads to use");
     struct arg_int*		cl_verbose				= arg_intn("v", "verbose", NULL, 0, 1, "Verbose level");
@@ -8806,6 +8809,7 @@ FILE* LoadSettings(int argc, char ** argv)
         cl_use_cuvid,
         cl_use_vdpau,
         cl_use_dxva2,
+        cl_use_qsv,
         cl_list_decoders,
         cl_threads,
         cl_pid,
@@ -9267,6 +9271,12 @@ FILE* LoadSettings(int argc, char ** argv)
     {
         printf("Enabling use_dxva2\n");
         use_dxva2 = 1;
+    }
+
+    if (cl_use_qsv->count)
+    {
+        printf("Enabling use_qsv\n");
+        use_qsv = 1;
     }
 
     if (cl_threads->count)
@@ -10114,7 +10124,7 @@ void LoadCutScene(const char *filename)
 #define OWN_HISTOGRAM_WIDTH 4
 #define OWN_HISTOGRAM_HEIGHT 256
 
-static DECLARE_ALIGNED(32, int, own_histogram)[OWN_HISTOGRAM_WIDTH][OWN_HISTOGRAM_HEIGHT];
+static int own_histogram[OWN_HISTOGRAM_WIDTH][OWN_HISTOGRAM_HEIGHT];
 int scan_step;
 
 #define SCAN_MULTI
@@ -16527,8 +16537,11 @@ void dump_data(char *start, int length)
 
 void close_data()
 {
-	if (output_data && dump_data_file) {
-		fclose(dump_data_file);
-		dump_data_file = 0;
-	}
+    if (output_data)
+    {
+	    if (dump_data_file) {
+		    fclose(dump_data_file);
+		    dump_data_file = 0;
+	    }
+    }
 }

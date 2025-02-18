@@ -58,6 +58,9 @@ const HWAccel hwaccels[] = {
 #if CONFIG_VDA
     { "vda",   vda_init,   HWACCEL_VDA,   AV_PIX_FMT_VDA },
 #endif
+#if HAVE_QSV
+    { "qsv",   qsv_init,   HWACCEL_QSV,   AV_PIX_FMT_QSV },
+#endif
     { 0 },
 };
 
@@ -70,6 +73,7 @@ extern int      hardware_decode;
 extern int      use_cuvid;
 extern int      use_vdpau;
 extern int      use_dxva2;
+extern int      use_qsv;
 int av_log_level=AV_LOG_INFO;
 
 
@@ -351,7 +355,7 @@ static void signal_handler (int sig)
 #define AUDIOBUFFER	1600000
 
 static double base_apts = 0.0, apts, top_apts = 0.0;
-static DECLARE_ALIGNED(16, short, audio_buffer[AUDIOBUFFER]);
+static short audio_buffer[AUDIOBUFFER];
 static short *audio_buffer_ptr = audio_buffer;
 static int audio_samples = 0;
 #define ISSAME(T1,T2) (fabs((T1) - (T2)) < 0.001)
@@ -573,8 +577,14 @@ void sound_to_frames(VideoState *is, short **b, int s, int c, int format)
                     for (l=0;l < c;l++ ) volume += *((fb[l])++) * 64000;
                 else
                     for (l=0;l < c;l++ ) volume += *((fb[0])++) * 64000;
+#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+                *audio_buffer_ptr++ = volume / is->audio_st->codecpar->ch_layout.nb_channels;
+                avg_volume += abs(volume / is->audio_st->codecpar->ch_layout.nb_channels);
+#else
                 *audio_buffer_ptr++ = volume / is->audio_st->codecpar->channels;
                 avg_volume += abs(volume / is->audio_st->codecpar->channels);
+#endif
             }
         }
         else
@@ -590,8 +600,14 @@ void sound_to_frames(VideoState *is, short **b, int s, int c, int format)
                     for (l=0;l < c;l++ ) volume += *((sb[l])++);
                 else
                     for (l=0;l < c;l++ ) volume += *((sb[0])++);
+#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+                *audio_buffer_ptr++ = volume / is->audio_st->codecpar->ch_layout.nb_channels;
+                avg_volume += abs(volume / is->audio_st->codecpar->ch_layout.nb_channels);
+#else
                 *audio_buffer_ptr++ = volume / is->audio_st->codecpar->channels;
                 avg_volume += abs(volume / is->audio_st->codecpar->channels);
+#endif
             }
         }
     }
@@ -767,7 +783,19 @@ void audio_packet_process(VideoState *is, AVPacket *pkt)
         }
 
 
-
+#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+        data_size = av_samples_get_buffer_size(NULL, is->frame->ch_layout.nb_channels,
+                                               is->frame->nb_samples,
+                                               is->frame->format, 1);
+        if (data_size > 0)
+        {
+            sound_to_frames(is, (short **)is->frame->data, is->frame->nb_samples ,is->frame->ch_layout.nb_channels, is->frame->format);
+        }
+        is->audio_clock += (double)data_size /
+                           (is->frame->ch_layout.nb_channels * is->frame->sample_rate * av_get_bytes_per_sample(is->frame->format));
+        av_frame_unref(is->frame);
+#else
         data_size = av_samples_get_buffer_size(NULL, is->frame->channels,
                                                is->frame->nb_samples,
                                                is->frame->format, 1);
@@ -778,6 +806,7 @@ void audio_packet_process(VideoState *is, AVPacket *pkt)
         is->audio_clock += (double)data_size /
                            (is->frame->channels * is->frame->sample_rate * av_get_bytes_per_sample(is->frame->format));
         av_frame_unref(is->frame);
+#endif
     }
 
     if (ALIGN_AC3_PACKETS && is->audio_st->codecpar->codec_id == AV_CODEC_ID_AC3) {
@@ -1036,6 +1065,10 @@ again:
     if(ret < 0)
     {
         char *error_text;
+#if LIBAVCODEC_BUILD >= AV_VERSION_INT(59, 37, 100) && \
+    LIBAVUTIL_BUILD >= AV_VERSION_INT(57, 28, 100)
+        error_text = "Generic";
+#else
         if (is->pFormatCtx->iformat->read_seek)
         {
             error_text = "Format specific";
@@ -1048,6 +1081,7 @@ again:
         {
             error_text = "Generic";
         }
+#endif
 
         fprintf(stderr, "%s error while seeking. target=%6.3f, \"%s\"\n", error_text,is->seek_pts, is->pFormatCtx->url);
 
@@ -1674,12 +1708,24 @@ int stream_component_open(VideoState *is, int stream_index)
 
 	codec = avcodec_find_decoder(codecPar->codec_id);
 
+    if (use_qsv && !codec_hw) {
+		if (codecPar->codec_id == AV_CODEC_ID_MJPEG) codec_hw = avcodec_find_decoder_by_name("mjpeg_qsv");
+		if (codecPar->codec_id == AV_CODEC_ID_MPEG2VIDEO) codec_hw = avcodec_find_decoder_by_name("mpeg2_qsv");
+		if (codecPar->codec_id == AV_CODEC_ID_H264) codec_hw = avcodec_find_decoder_by_name("h264_qsv");
+		if (codecPar->codec_id == AV_CODEC_ID_VC1) codec_hw = avcodec_find_decoder_by_name("vc1_qsv");
+		if (codecPar->codec_id == AV_CODEC_ID_HEVC) codec_hw = avcodec_find_decoder_by_name("hevc_qsv");
+		if (codecPar->codec_id == AV_CODEC_ID_AV1) codec_hw = avcodec_find_decoder_by_name("av1_qsv");
+		if (codecPar->codec_id == AV_CODEC_ID_VP8) codec_hw = avcodec_find_decoder_by_name("vp8_qsv");
+		if (codecPar->codec_id == AV_CODEC_ID_VP9) codec_hw = avcodec_find_decoder_by_name("vp9_qsv");
+    }
+
     if (use_dxva2 && !codec_hw) {
 		if (codecPar->codec_id == AV_CODEC_ID_MPEG2VIDEO) codec_hw = avcodec_find_decoder_by_name("mpeg2_dxva2");
 		if (codecPar->codec_id == AV_CODEC_ID_H264) codec_hw = avcodec_find_decoder_by_name("h264_dxva2");
 		if (codecPar->codec_id == AV_CODEC_ID_MPEG4) codec_hw = avcodec_find_decoder_by_name("mpeg4_dxva2");
 		if (codecPar->codec_id == AV_CODEC_ID_VC1) codec_hw = avcodec_find_decoder_by_name("vc1_dxva2");
 		if (codecPar->codec_id == AV_CODEC_ID_HEVC) codec_hw = avcodec_find_decoder_by_name("hevc_dxva2");
+		if (codecPar->codec_id == AV_CODEC_ID_AV1) codec_hw = avcodec_find_decoder_by_name("av1_dxva2");
     }
 
     if (use_vdpau && !codec_hw) {
@@ -1695,7 +1741,8 @@ int stream_component_open(VideoState *is, int stream_index)
 		if (codecPar->codec_id == AV_CODEC_ID_H264) codec_hw = avcodec_find_decoder_by_name("h264_cuvid");
 		if (codecPar->codec_id == AV_CODEC_ID_HEVC) codec_hw = avcodec_find_decoder_by_name("hevc_cuvid");
 		if (codecPar->codec_id == AV_CODEC_ID_MPEG4) codec_hw = avcodec_find_decoder_by_name("mpeg4_cuvid");
-		if (codecPar->codec_id == AV_CODEC_ID_VC1) codec_hw = avcodec_find_decoder_by_name("vc1_cuvidl");
+		if (codecPar->codec_id == AV_CODEC_ID_VC1) codec_hw = avcodec_find_decoder_by_name("vc1_cuvid");
+		if (codecPar->codec_id == AV_CODEC_ID_AV1) codec_hw = avcodec_find_decoder_by_name("av1_cuvid");
     }
 
 	// If decoding in hardware try if running on a Raspberry Pi and then use it's decoder instead.
