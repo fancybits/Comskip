@@ -75,7 +75,7 @@ typedef unsigned short uint16_t;
 typedef unsigned int uint32_t;
 typedef unsigned __int64 uint64_t;
 #if !defined(HARDWARE_DECODE) && !defined(__MINGW64__)
-#include <compat/w32pthreads.h>  // Is already defined in ffmpeg
+//#include <compat/w32pthreads.h>  // Is already defined in ffmpeg
 #endif
 
 #include <time.h>
