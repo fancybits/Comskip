@@ -569,6 +569,11 @@ void sound_to_frames(VideoState *is, short **b, int s, int c, int format)
             for (l=0;l < c;l++ )
             {
                 fb[l] = (float*)b[l];
+                // handle tracks where more channels advertised than data available
+                if (fb[l] == NULL) {
+                    c = l-1;
+                    break;
+                }
             }
             for (i = 0; i < s; i++)
             {
