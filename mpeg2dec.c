@@ -1837,6 +1837,12 @@ int stream_component_open(VideoState *is, int stream_index)
 
     if (!hardware_decode) av_dict_set_int(&myoptions, "gray", 1, 0);
 
+    // lowres must be set before avcodec_open2 so ff_idctdsp_init selects the
+    // correct IDCT (e.g. 4x4 for lowres=1). Setting it after open causes the
+    // full 8x8 AVX IDCT to be used while frame buffers are half-sized, leading
+    // to an out-of-bounds write and SIGSEGV.
+    if (codec && codecCtx->codec_type == AVMEDIA_TYPE_VIDEO)
+        codecCtx->lowres = min(codec->max_lowres, lowres);
 
  //       av_dict_set_int(&myoptions, "fastint", 1, 0);
  //       av_dict_set_int(&myoptions, "skip_alpha", 1, 0);
@@ -1887,7 +1893,7 @@ int stream_component_open(VideoState *is, int stream_index)
         is->pFrame = av_frame_alloc();
         if (!hardware_decode) codecCtx->flags |= AV_CODEC_FLAG_GRAY;
 //       codecCtx->thread_type = 1; // Frame based threading
-        codecCtx->lowres = min(codecCtx->codec->max_lowres, lowres);
+//      codecCtx->lowres = min(codecCtx->codec->max_lowres, lowres); // moved before avcodec_open2
         if (codecCtx->codec_id == AV_CODEC_ID_H264)
         {
             is_h264 = 1;
