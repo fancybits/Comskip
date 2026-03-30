@@ -389,6 +389,40 @@ typedef struct
 cc_text_info*			cc_text = NULL;
 long					cc_text_count = 0;
 long					max_cc_text_count = 0;
+int						have_xvtt_subtitles = 0;
+
+extern void InitializeCCTextArray(long i);
+
+void add_cc_text(long start_frame, long end_frame, const char *text)
+{
+    if (cc_text == NULL) return;
+
+    // Set end_frame of previous entry if it wasn't explicitly set
+    if (cc_text_count > 0 && cc_text[cc_text_count - 1].end_frame < 0) {
+        cc_text[cc_text_count - 1].end_frame = start_frame;
+    }
+
+    InitializeCCTextArray(cc_text_count);
+    if (cc_text == NULL) return;
+
+    cc_text[cc_text_count].start_frame = start_frame;
+    cc_text[cc_text_count].end_frame = end_frame;
+    cc_text[cc_text_count].text_len = strnlen(text, sizeof(cc_text[cc_text_count].text) - 1);
+    strncpy((char*)cc_text[cc_text_count].text, text, sizeof(cc_text[cc_text_count].text) - 1);
+    cc_text[cc_text_count].text[sizeof(cc_text[cc_text_count].text) - 1] = '\0';
+    // Replace newlines with spaces so the log stays line-oriented.
+    for (unsigned char *p = cc_text[cc_text_count].text; *p; p++)
+        if (*p == '\n' || *p == '\r') *p = ' ';
+    cc_text_count++;
+}
+
+void end_cc_text(long end_frame)
+{
+    if (cc_text == NULL || cc_text_count == 0) return;
+    if (cc_text[cc_text_count - 1].end_frame < 0) {
+        cc_text[cc_text_count - 1].end_frame = end_frame;
+    }
+}
 
 
 #define AR_UNDEF	0.0
@@ -4585,7 +4619,7 @@ again:
     }
 
     // close out the last cc cblock
-    if (processCC)
+    if (processCC || have_xvtt_subtitles)
     {
         cc_block[cc_block_count].end_frame = frame_count;
         cc_block_count++;
@@ -12906,7 +12940,7 @@ void InitComSkip(void)
         }
     }
 
-    if (processCC)
+    if (processCC || have_xvtt_subtitles)
     {
         if(!initialized)
         {

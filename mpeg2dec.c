@@ -74,6 +74,9 @@ extern int      use_cuvid;
 extern int      use_vdpau;
 extern int      use_dxva2;
 extern int      use_qsv;
+extern int      have_xvtt_subtitles;
+extern void     add_cc_text(long start, long end, const char *text);
+extern void     end_cc_text(long end_frame);
 int av_log_level=AV_LOG_INFO;
 
 
@@ -632,6 +635,47 @@ void sound_to_frames(VideoState *is, short **b, int s, int c, int format)
 static uint8_t ac3_packet[AC3_BUFFER_SIZE];
 static int ac3_packet_index = 0;
 int data_size;
+
+void subtitle_packet_process(VideoState *is, AVPacket *packet)
+{
+    AVSubtitle sub;
+    int got_sub = 0;
+    avcodec_decode_subtitle2(is->subtitle_ctx, &sub, &got_sub, packet);
+    if (got_sub) {
+        double sub_pts = (packet->pts != AV_NOPTS_VALUE)
+            ? packet->pts * av_q2d(is->subtitle_st->time_base)
+            : is->video_clock;
+        long sub_frame = (long)(sub_pts * is->fps);
+
+        if (sub.num_rects > 0) {
+            for (unsigned i = 0; i < sub.num_rects; i++) {
+                const char *text = NULL;
+                if (sub.rects[i]->text) {
+                    text = sub.rects[i]->text;
+                } else if (sub.rects[i]->type == SUBTITLE_ASS && sub.rects[i]->ass) {
+                    // FFmpeg's ff_ass_get_dialog produces:
+                    //   readorder,layer,style,speaker,marginL,marginR,marginV,,text
+                    // The text field follows the 8th comma.
+                    text = sub.rects[i]->ass;
+                    int commas = 0;
+                    for (const char *p = text; *p; p++) {
+                        if (*p == ',') {
+                            commas++;
+                            if (commas == 8) { text = p + 1; break; }
+                        }
+                    }
+                }
+                if (text && text[0] != '\0') {
+                    add_cc_text(sub_frame, -1, text);
+                }
+            }
+        } else {
+            // got_sub=1 with num_rects=0 is an xVTT end-of-caption signal.
+            end_cc_text(sub_frame);
+        }
+        avsubtitle_free(&sub);
+    }
+}
 
 int ac3_package_misalignment_count = 0;
 
@@ -1213,9 +1257,9 @@ nextpacket:
         {
             // audio_packet_process(is, packet);
         }
-        else
+        else if(packet->stream_index == is->subtitleStream && is->subtitle_ctx)
         {
-            // Do nothing
+            subtitle_packet_process(is, packet);
         }
         av_packet_unref(packet);
     }
@@ -2128,9 +2172,17 @@ again:
         subtitle_index = av_find_best_stream(is->pFormatCtx, AVMEDIA_TYPE_SUBTITLE, -1, video_index, NULL, 0);
         if(subtitle_index >= 0)
         {
-            is->subtitle_st = is->pFormatCtx->streams[subtitle_index];
-            if (demux_pid)
+            stream_component_open(is, subtitle_index);
+            if (is->subtitleStream < 0)
+            {
+                // Codec open failed, but we can still record the stream info
+                is->subtitle_st = is->pFormatCtx->streams[subtitle_index];
+            }
+            if (demux_pid && is->subtitle_st)
                 selected_subtitle_pid = is->subtitle_st->id;
+            if (is->subtitle_ctx && is->subtitle_ctx->codec_id == AV_CODEC_ID_WEBVTT) {
+                have_xvtt_subtitles = 1;
+            }
         }
 
     }
@@ -2522,18 +2574,9 @@ nextpacket:
                 if (packet->size > 0 && packet->data != NULL)
                     audio_packet_process(is, packet);
             }
-            else
+            else if(packet->stream_index == is->subtitleStream && is->subtitle_ctx)
             {
-                /*
-                			  ccDataLen = (int)packet->size;
-                			  for (i=0; i<ccDataLen; i++) {
-                				  ccData[i] = packet->data[i];
-                			  }
-                			  dump_data((char *)ccData, (int)ccDataLen);
-                					if (output_srt)
-                						process_block(ccData, (int)ccDataLen);
-                					if (processCC) ProcessCCData();
-                */
+                subtitle_packet_process(is, packet);
             }
             av_packet_unref(packet);
             if (is->video_clock == old_clock)
