@@ -648,7 +648,8 @@ void subtitle_packet_process(VideoState *is, AVPacket *packet)
         long sub_frame = (long)(sub_pts * is->fps);
 
         if (sub.num_rects > 0) {
-            for (unsigned i = 0; i < sub.num_rects; i++) {
+            unsigned i;
+            for (i = 0; i < sub.num_rects; i++) {
                 const char *text = NULL;
                 if (sub.rects[i]->text) {
                     text = sub.rects[i]->text;
@@ -656,9 +657,10 @@ void subtitle_packet_process(VideoState *is, AVPacket *packet)
                     // FFmpeg's ff_ass_get_dialog produces:
                     //   readorder,layer,style,speaker,marginL,marginR,marginV,,text
                     // The text field follows the 8th comma.
-                    text = sub.rects[i]->ass;
+                    const char *p;
                     int commas = 0;
-                    for (const char *p = text; *p; p++) {
+                    text = sub.rects[i]->ass;
+                    for (p = text; *p; p++) {
                         if (*p == ',') {
                             commas++;
                             if (commas == 8) { text = p + 1; break; }

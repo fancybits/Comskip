@@ -410,9 +410,12 @@ void add_cc_text(long start_frame, long end_frame, const char *text)
     cc_text[cc_text_count].text_len = strnlen(text, sizeof(cc_text[cc_text_count].text) - 1);
     strncpy((char*)cc_text[cc_text_count].text, text, sizeof(cc_text[cc_text_count].text) - 1);
     cc_text[cc_text_count].text[sizeof(cc_text[cc_text_count].text) - 1] = '\0';
-    // Replace newlines with spaces so the log stays line-oriented.
-    for (unsigned char *p = cc_text[cc_text_count].text; *p; p++)
-        if (*p == '\n' || *p == '\r') *p = ' ';
+    {
+        // Replace newlines with spaces so the log stays line-oriented.
+        unsigned char *p;
+        for (p = cc_text[cc_text_count].text; *p; p++)
+            if (*p == '\n' || *p == '\r') *p = ' ';
+    }
     cc_text_count++;
 }
 
