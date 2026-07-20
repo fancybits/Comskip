@@ -24,7 +24,7 @@ if ENABLE_DONATOR
 endif
 
 if PLATFORM_WIN32
-    PLATFORM_LIBS = -lcomdlg32 -lgdi32
+    PLATFORM_LIBS = -lcomdlg32 -lgdi32 -ldxguid
 else
     PLATFORM_LIBS = -ldl
 endif
