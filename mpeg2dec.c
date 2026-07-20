@@ -680,6 +680,26 @@ void subtitle_packet_process(VideoState *is, AVPacket *packet)
 }
 
 int ac3_package_misalignment_count = 0;
+static int av_anchor_logged = 0;
+
+// Audio and video PTS share the container timeline, and the frame PTS used in
+// backfill_frame_volumes() are rebased on the video stream's start_time, so
+// the audio clock must subtract that same origin. Falls back to the audio
+// stream's own start_time (the historical behavior, leaving the two clocks
+// unrelated) only when the video origin is unknown.
+static int av_shared_origin_known(VideoState *is)
+{
+    return is->video_st && is->video_st->start_time != AV_NOPTS_VALUE;
+}
+
+static double av_clock_origin(VideoState *is)
+{
+    if (av_shared_origin_known(is))
+        return av_q2d(is->video_st->time_base) * is->video_st->start_time;
+    if (is->audio_st && is->audio_st->start_time != AV_NOPTS_VALUE)
+        return av_q2d(is->audio_st->time_base) * is->audio_st->start_time;
+    return 0.0;
+}
 
 void audio_packet_process(VideoState *is, AVPacket *pkt)
 {
@@ -765,7 +785,7 @@ void audio_packet_process(VideoState *is, AVPacket *pkt)
     if (pkt->pts != AV_NOPTS_VALUE)
     {
         prev_audio_clock = is->audio_clock;
-        is->audio_clock = av_q2d(is->audio_st->time_base)*( pkt->pts -  (is->audio_st->start_time != AV_NOPTS_VALUE ? is->audio_st->start_time : 0)) - apts_offset;
+        is->audio_clock = av_q2d(is->audio_st->time_base) * pkt->pts - av_clock_origin(is) - apts_offset;
             if (ALIGN_AC3_PACKETS && is->audio_st->codecpar->codec_id == AV_CODEC_ID_AC3) {
                     if (   ISSAME(is->audio_clock - prev_audio_clock, 0.032)
                         || ISSAME(is->audio_clock - prev_audio_clock, -0.032)
@@ -786,6 +806,19 @@ void audio_packet_process(VideoState *is, AVPacket *pkt)
 //                    apts_offset += is->audio_clock - prev_audio_clock ;
 //                    is->audio_clock = prev_audio_clock;
                 }
+            }
+        }
+        if (!av_anchor_logged) {
+            av_anchor_logged = 1;
+            // Provenance marker: consumers grep this exact line to tell that
+            // the sound column is aligned with the video clock, so it is only
+            // asserted when the shared origin is actually in effect. Level 1
+            // so it appears in any log a scan produces.
+            if (av_shared_origin_known(is)) {
+                double audio_origin = (is->audio_st->start_time != AV_NOPTS_VALUE ? av_q2d(is->audio_st->time_base) * is->audio_st->start_time : 0.0);
+                Debug( 1,"Audio clock rebased to video origin, shift = %10.3f\n", av_clock_origin(is) - audio_origin);
+            } else {
+                Debug( 1,"Audio clock video origin unknown, left on audio origin\n");
             }
         }
         if (!initial_apts_set) {
