@@ -870,6 +870,9 @@ int					clogoMaxX;
 int					clogoMinY;
 int					clogoMaxY;
 unsigned char choriz_edgemask[MAXHEIGHT*MAXWIDTH];
+int logo_mask_loaded_width = -1;   // stride the loaded mask cells are stored at;
+                                   // the live width global is rewritten by decode
+                                   // and analysis contexts and is 0 at load time
 unsigned char cvert_edgemask[MAXHEIGHT*MAXWIDTH];
 
 
@@ -11341,7 +11344,7 @@ double CheckStationLogoEdge(unsigned char* testFrame)
         {
             for (x = clogoMinX; x <= clogoMaxX; x += edge_step)
             {
-                index = y * width + x;
+                index = y * ((logo_mask_loaded_width > 0) ? logo_mask_loaded_width : width) + x;
                 if (choriz_edgemask[index])
                 {
                     if (TEST_HEDGE1(testFrame,x,y))
@@ -11368,7 +11371,7 @@ double CheckStationLogoEdge(unsigned char* testFrame)
         {
             for (x = clogoMinX; x <= clogoMaxX; x += edge_step)
             {
-                index = y * width + x;
+                index = y * ((logo_mask_loaded_width > 0) ? logo_mask_loaded_width : width) + x;
                 if (choriz_edgemask[index])
                 {
                     if (TEST_HEDGE2(testFrame,x,y))
@@ -11395,7 +11398,7 @@ double CheckStationLogoEdge(unsigned char* testFrame)
         {
             for (x = clogoMinX; x <= clogoMaxX; x += edge_step)
             {
-                index = y * width + x;
+                index = y * ((logo_mask_loaded_width > 0) ? logo_mask_loaded_width : width) + x;
                 if (choriz_edgemask[index])
                 {
                     if (TEST_HEDGE3(testFrame,x,y))
@@ -11422,7 +11425,7 @@ double CheckStationLogoEdge(unsigned char* testFrame)
         {
             for (x = clogoMinX; x <= clogoMaxX; x += edge_step)
             {
-                index = y * width + x;
+                index = y * ((logo_mask_loaded_width > 0) ? logo_mask_loaded_width : width) + x;
                 if (choriz_edgemask[index] && testFrame[index] < 200)
                 {
                     if (TEST_HEDGE0(testFrame,x,y))
@@ -11448,7 +11451,7 @@ double CheckStationLogoEdge(unsigned char* testFrame)
         {
             for (x = clogoMinX; x <= clogoMaxX; x += edge_step)
             {
-                index = y * width + x;
+                index = y * ((logo_mask_loaded_width > 0) ? logo_mask_loaded_width : width) + x;
                 if (choriz_edgemask[index])
                 {
                     if (TEST_HEDGE0(testFrame,x,y))
@@ -12044,6 +12047,7 @@ bool SearchForLogoEdges(void)
         clogoMaxY = tlogoMaxY;
         memcpy(choriz_edgemask, thoriz_edgemask, width * height);
         memcpy(cvert_edgemask, tvert_edgemask, width * height);
+        logo_mask_loaded_width = width;
 
 
         logoTrendCounter = num_logo_buffers;
@@ -12577,11 +12581,11 @@ void LoadLogoMaskData(void)
             switch (temp)
             {
             case ' ':
-                choriz_edgemask[y * width + x] = 0;
+                choriz_edgemask[y * MAXWIDTH + x] = 0;
                 break;
 
             case '|':
-                choriz_edgemask[y * width + x] = 1;
+                choriz_edgemask[y * MAXWIDTH + x] = 1;
                 break;
             }
         }
@@ -12603,11 +12607,11 @@ void LoadLogoMaskData(void)
             switch (temp)
             {
             case ' ':
-                cvert_edgemask[y * width + x] = 0;
+                cvert_edgemask[y * MAXWIDTH + x] = 0;
                 break;
 
             case '-':
-                cvert_edgemask[y * width + x] = 1;
+                cvert_edgemask[y * MAXWIDTH + x] = 1;
                 break;
             }
         }
@@ -12631,23 +12635,23 @@ void LoadLogoMaskData(void)
                 switch (temp)
                 {
                 case ' ':
-                    choriz_edgemask[y * width + x] = 0;
-                    cvert_edgemask[y * width + x] = 0;
+                    choriz_edgemask[y * MAXWIDTH + x] = 0;
+                    cvert_edgemask[y * MAXWIDTH + x] = 0;
                     break;
 
                 case '-':
-                    choriz_edgemask[y * width + x] = 0;
-                    cvert_edgemask[y * width + x] = 1;
+                    choriz_edgemask[y * MAXWIDTH + x] = 0;
+                    cvert_edgemask[y * MAXWIDTH + x] = 1;
                     break;
 
                 case '|':
-                    choriz_edgemask[y * width + x] = 1;
-                    cvert_edgemask[y * width + x] = 0;
+                    choriz_edgemask[y * MAXWIDTH + x] = 1;
+                    cvert_edgemask[y * MAXWIDTH + x] = 0;
                     break;
 
                 case '+':
-                    choriz_edgemask[y * width + x] = 1;
-                    cvert_edgemask[y * width + x] = 1;
+                    choriz_edgemask[y * MAXWIDTH + x] = 1;
+                    cvert_edgemask[y * MAXWIDTH + x] = 1;
                     break;
 
                 }
@@ -12657,6 +12661,7 @@ void LoadLogoMaskData(void)
     fclose(logo_file);
 
 
+    logo_mask_loaded_width = MAXWIDTH;
     logoInfoAvailable = true;
     startOverAfterLogoInfoAvail = true; // prevent continuous searching for logo when a logo file is specified
     secondLogoSearch = true;
