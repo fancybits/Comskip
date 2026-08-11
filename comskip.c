@@ -4626,8 +4626,16 @@ again:
     {
         cc_block[cc_block_count].end_frame = frame_count;
         cc_block_count++;
-        cc_text[cc_text_count].end_frame = frame_count;
-        cc_text_count++;
+        // xVTT entries are complete when added; just close the last one.
+        end_cc_text(frame_count);
+        if (processCC)
+        {
+            // The 608 decoder keeps an in-progress entry at cc_text[cc_text_count]
+            // that only becomes valid once counted; xVTT runs have no such entry,
+            // so counting it here would publish uninitialized memory.
+            cc_text[cc_text_count].end_frame = frame_count;
+            cc_text_count++;
+        }
         for (i = cc_text_count - 1; i > 0; i--)
         {
             if (cc_text[i].text_len == 0)
