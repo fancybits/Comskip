@@ -46,6 +46,14 @@ double test_pts = 0.0;
 #include <libavutil/samplefmt.h>
 #include <libswscale/swscale.h>
 
+// FFmpeg 7 removed AVCodecContext.ticks_per_frame; decoders fold its effect
+// into framerate, so the ticks divisor collapses to 1.
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(61, 0, 0)
+#define DEC_TICKS_PER_FRAME(ctx) 1
+#else
+#define DEC_TICKS_PER_FRAME(ctx) ((ctx)->ticks_per_frame)
+#endif
+
 #ifdef HARDWARE_DECODE
 #include <fftools/ffmpeg.h>
 const HWAccel hwaccels[] = {
@@ -680,6 +688,26 @@ void subtitle_packet_process(VideoState *is, AVPacket *packet)
 }
 
 int ac3_package_misalignment_count = 0;
+static int av_anchor_logged = 0;
+
+// Audio and video PTS share the container timeline, and the frame PTS used in
+// backfill_frame_volumes() are rebased on the video stream's start_time, so
+// the audio clock must subtract that same origin. Falls back to the audio
+// stream's own start_time (the historical behavior, leaving the two clocks
+// unrelated) only when the video origin is unknown.
+static int av_shared_origin_known(VideoState *is)
+{
+    return is->video_st && is->video_st->start_time != AV_NOPTS_VALUE;
+}
+
+static double av_clock_origin(VideoState *is)
+{
+    if (av_shared_origin_known(is))
+        return av_q2d(is->video_st->time_base) * is->video_st->start_time;
+    if (is->audio_st && is->audio_st->start_time != AV_NOPTS_VALUE)
+        return av_q2d(is->audio_st->time_base) * is->audio_st->start_time;
+    return 0.0;
+}
 
 void audio_packet_process(VideoState *is, AVPacket *pkt)
 {
@@ -765,7 +793,7 @@ void audio_packet_process(VideoState *is, AVPacket *pkt)
     if (pkt->pts != AV_NOPTS_VALUE)
     {
         prev_audio_clock = is->audio_clock;
-        is->audio_clock = av_q2d(is->audio_st->time_base)*( pkt->pts -  (is->audio_st->start_time != AV_NOPTS_VALUE ? is->audio_st->start_time : 0)) - apts_offset;
+        is->audio_clock = av_q2d(is->audio_st->time_base) * pkt->pts - av_clock_origin(is) - apts_offset;
             if (ALIGN_AC3_PACKETS && is->audio_st->codecpar->codec_id == AV_CODEC_ID_AC3) {
                     if (   ISSAME(is->audio_clock - prev_audio_clock, 0.032)
                         || ISSAME(is->audio_clock - prev_audio_clock, -0.032)
@@ -786,6 +814,19 @@ void audio_packet_process(VideoState *is, AVPacket *pkt)
 //                    apts_offset += is->audio_clock - prev_audio_clock ;
 //                    is->audio_clock = prev_audio_clock;
                 }
+            }
+        }
+        if (!av_anchor_logged) {
+            av_anchor_logged = 1;
+            // Provenance marker: consumers grep this exact line to tell that
+            // the sound column is aligned with the video clock, so it is only
+            // asserted when the shared origin is actually in effect. Level 1
+            // so it appears in any log a scan produces.
+            if (av_shared_origin_known(is)) {
+                double audio_origin = (is->audio_st->start_time != AV_NOPTS_VALUE ? av_q2d(is->audio_st->time_base) * is->audio_st->start_time : 0.0);
+                Debug( 1,"Audio clock rebased to video origin, shift = %10.3f\n", av_clock_origin(is) - audio_origin);
+            } else {
+                Debug( 1,"Audio clock video origin unknown, left on audio origin\n");
             }
         }
         if (!initial_apts_set) {
@@ -1366,10 +1407,10 @@ static int    prev_strange_framenum = 0;
         }
         else
         {
-           frame_delay = av_q2d(is->dec_ctx->time_base) * is->dec_ctx->ticks_per_frame ;
+           frame_delay = av_q2d(is->dec_ctx->time_base) * DEC_TICKS_PER_FRAME(is->dec_ctx) ;
         }
 
-//        frame_delay = av_q2d(is->dec_ctx->time_base) * is->dec_ctx->ticks_per_frame ;
+//        frame_delay = av_q2d(is->dec_ctx->time_base) * DEC_TICKS_PER_FRAME(is->dec_ctx) ;
         repeat = av_stream_get_parser(is->video_st) ? av_stream_get_parser(is->video_st)->repeat_pict: 4;
 
  //       if (prev_frame_delay != 0.0 && frame_delay != prev_frame_delay)
@@ -1480,17 +1521,17 @@ static int    prev_strange_framenum = 0;
 //#define SHOW_VIDEO_TIMING
 #ifdef SHOW_VIDEO_TIMING
         if (framenum==0)
-            Debug(1,"Video timing ---------------------------------------------------\n", frame_delay/is->dec_ctx->ticks_per_frame, is->dec_ctx->ticks_per_frame, repeat, real_pts,calculated_delay);
+            Debug(1,"Video timing ---------------------------------------------------\n", frame_delay/DEC_TICKS_PER_FRAME(is->dec_ctx), DEC_TICKS_PER_FRAME(is->dec_ctx), repeat, real_pts,calculated_delay);
         else if (framenum<20)
-            Debug(1,"Video timing fr=%6.5f, tick=%d, repeat=%d, pts=%6.3f, step=%6.5f\n", frame_delay/is->dec_ctx->ticks_per_frame, is->dec_ctx->ticks_per_frame, repeat, real_pts,calculated_delay);
+            Debug(1,"Video timing fr=%6.5f, tick=%d, repeat=%d, pts=%6.3f, step=%6.5f\n", frame_delay/DEC_TICKS_PER_FRAME(is->dec_ctx), DEC_TICKS_PER_FRAME(is->dec_ctx), repeat, real_pts,calculated_delay);
 #endif // SHOW_VIDEO_TIMING
 
 
         pts_offset *= 0.9;
         if (!reviewing && timeline_repair) {
             if (framenum > 1 && fabs(calculated_delay - pts_offset - frame_delay) < 1.0) { // Allow max 0.5 second timeline jitter to be compensated
-                if (!ISSAME(3*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay))
-                    if (!ISSAME(1*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay))
+                if (!ISSAME(3*frame_delay/ DEC_TICKS_PER_FRAME(is->dec_ctx), calculated_delay))
+                    if (!ISSAME(1*frame_delay/ DEC_TICKS_PER_FRAME(is->dec_ctx), calculated_delay))
                         pts_offset = pts_offset + frame_delay - calculated_delay;
             }
         }
@@ -1505,9 +1546,9 @@ static int    prev_strange_framenum = 0;
 
         if (!reviewing
             && framenum > 1 && fabs(calculated_delay - frame_delay) > 0.01
-            && !ISSAME(3*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay)
-            && !ISSAME(2*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay)
-            && !ISSAME(1*frame_delay/ is->dec_ctx->ticks_per_frame, calculated_delay)
+            && !ISSAME(3*frame_delay/ DEC_TICKS_PER_FRAME(is->dec_ctx), calculated_delay)
+            && !ISSAME(2*frame_delay/ DEC_TICKS_PER_FRAME(is->dec_ctx), calculated_delay)
+            && !ISSAME(1*frame_delay/ DEC_TICKS_PER_FRAME(is->dec_ctx), calculated_delay)
             ){
             if ( (prev_strange_framenum + 1 != framenum) &&( prev_strange_step < fabs(calculated_delay - frame_delay))) {
                 Debug(8 ,"Strange video pts step of %6.5f instead of %6.5f at frame %d\n", calculated_delay+0.0000005, frame_delay+0.0000005, framenum); // Unknown strange step
@@ -1957,8 +1998,10 @@ int stream_component_open(VideoState *is, int stream_index)
             codecCtx->thread_count= 1;
 #endif
         }
+#if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(61, 0, 0)
         if (codecCtx->codec_id == AV_CODEC_ID_MPEG1VIDEO)
             is->dec_ctx->ticks_per_frame = 1;
+#endif
         if (demux_pid)
             selected_video_pid = is->video_st->id;
         /*
@@ -2145,7 +2188,7 @@ again:
         else
         {
             Debug(10, "Warning, no stream frame rate, deriving from codec\n");
-            is->fps = 1/(av_q2d(is->dec_ctx->time_base) * is->dec_ctx->ticks_per_frame );
+            is->fps = 1/(av_q2d(is->dec_ctx->time_base) * DEC_TICKS_PER_FRAME(is->dec_ctx) );
         }
         set_fps( 1.0 / is->fps);
 //        Debug(1, "Stream frame rate is %5.3f f/s\n", is->fps);
@@ -2529,7 +2572,7 @@ nextpacket:
 
                     if ((live_tv && retries < live_tv_retries) /* || (selftest == 3 && retries == 0) */)
                     {
-                        double frame_delay = av_q2d(is->dec_ctx->time_base) * is->dec_ctx->ticks_per_frame;
+                        double frame_delay = av_q2d(is->dec_ctx->time_base) * DEC_TICKS_PER_FRAME(is->dec_ctx);
 //                    uint64_t retry_target;
                         if (retries == 0)
                         {
