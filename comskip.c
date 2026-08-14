@@ -4628,11 +4628,14 @@ again:
         cc_block_count++;
         // xVTT entries are complete when added; just close the last one.
         end_cc_text(frame_count);
-        if (processCC)
+        if (!have_xvtt_subtitles)
         {
             // The 608 decoder keeps an in-progress entry at cc_text[cc_text_count]
             // that only becomes valid once counted; xVTT runs have no such entry,
-            // so counting it here would publish uninitialized memory.
+            // so counting it here would publish uninitialized memory. Gating on
+            // processCC is not enough: it is true whenever detect_method includes
+            // CC, which is the common configuration, so an xVTT run reaches here
+            // with processCC set and no in-progress entry to publish.
             cc_text[cc_text_count].end_frame = frame_count;
             cc_text_count++;
         }
