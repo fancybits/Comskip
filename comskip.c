@@ -870,9 +870,8 @@ int					clogoMaxX;
 int					clogoMinY;
 int					clogoMaxY;
 unsigned char choriz_edgemask[MAXHEIGHT*MAXWIDTH];
-int logo_mask_loaded_width = -1;   // stride the loaded mask cells are stored at;
-                                   // the live width global is rewritten by decode
-                                   // and analysis contexts and is 0 at load time
+int logo_mask_stride = 0;          // row stride of choriz/cvert_edgemask
+#define MASK_INDEX(X,Y) ((Y) * (logo_mask_stride > 0 ? logo_mask_stride : width) + (X))
 unsigned char cvert_edgemask[MAXHEIGHT*MAXWIDTH];
 
 
@@ -2242,9 +2241,9 @@ void OutputDebugWindow(bool showVideo, int frm, int grf, bool forceRefresh)
                         {
                             for (x = clogoMinX; x <= clogoMaxX ; x += edge_step)
                             {
-                                if (choriz_edgemask[y * width + x]) r = 255;
+                                if (choriz_edgemask[MASK_INDEX(x, y)]) r = 255;
                                 else r = 0;
-                                if (cvert_edgemask[y * width + x]) g = 255;
+                                if (cvert_edgemask[MASK_INDEX(x, y)]) g = 255;
                                 else g = 0;
                                 if (r || g) SETPIXEL(((int)((x-s)/divider)),((int)((y-s)/divider))+barh,r,g,0);
                             }
@@ -11334,7 +11333,8 @@ double CheckStationLogoEdge(unsigned char* testFrame)
     int goodEdges = 0;
 
     currentGoodEdge = 0.0;
-    if (videowidth < clogoMinX || height < clogoMinY)
+    if (videowidth < clogoMinX || height < clogoMinY
+            || clogoMaxX + edge_radius >= width || clogoMaxY + edge_radius >= height)
     {
         // No logo possible as frame size if different from where logo was found
     }
@@ -11344,7 +11344,7 @@ double CheckStationLogoEdge(unsigned char* testFrame)
         {
             for (x = clogoMinX; x <= clogoMaxX; x += edge_step)
             {
-                index = y * ((logo_mask_loaded_width > 0) ? logo_mask_loaded_width : width) + x;
+                index = MASK_INDEX(x, y);
                 if (choriz_edgemask[index])
                 {
                     if (TEST_HEDGE1(testFrame,x,y))
@@ -11371,7 +11371,7 @@ double CheckStationLogoEdge(unsigned char* testFrame)
         {
             for (x = clogoMinX; x <= clogoMaxX; x += edge_step)
             {
-                index = y * ((logo_mask_loaded_width > 0) ? logo_mask_loaded_width : width) + x;
+                index = MASK_INDEX(x, y);
                 if (choriz_edgemask[index])
                 {
                     if (TEST_HEDGE2(testFrame,x,y))
@@ -11398,7 +11398,7 @@ double CheckStationLogoEdge(unsigned char* testFrame)
         {
             for (x = clogoMinX; x <= clogoMaxX; x += edge_step)
             {
-                index = y * ((logo_mask_loaded_width > 0) ? logo_mask_loaded_width : width) + x;
+                index = MASK_INDEX(x, y);
                 if (choriz_edgemask[index])
                 {
                     if (TEST_HEDGE3(testFrame,x,y))
@@ -11425,8 +11425,8 @@ double CheckStationLogoEdge(unsigned char* testFrame)
         {
             for (x = clogoMinX; x <= clogoMaxX; x += edge_step)
             {
-                index = y * ((logo_mask_loaded_width > 0) ? logo_mask_loaded_width : width) + x;
-                if (choriz_edgemask[index] && testFrame[index] < 200)
+                index = MASK_INDEX(x, y);
+                if (choriz_edgemask[index] && testFrame[y * width + x] < 200)
                 {
                     if (TEST_HEDGE0(testFrame,x,y))
                     {
@@ -11434,7 +11434,7 @@ double CheckStationLogoEdge(unsigned char* testFrame)
                     }
                     testEdges++;
                 }
-                if (cvert_edgemask[index] && testFrame[index] < 200)
+                if (cvert_edgemask[index] && testFrame[y * width + x] < 200)
                 {
                     if (TEST_VEDGE0(testFrame,x,y))
                     {
@@ -11451,7 +11451,7 @@ double CheckStationLogoEdge(unsigned char* testFrame)
         {
             for (x = clogoMinX; x <= clogoMaxX; x += edge_step)
             {
-                index = y * ((logo_mask_loaded_width > 0) ? logo_mask_loaded_width : width) + x;
+                index = MASK_INDEX(x, y);
                 if (choriz_edgemask[index])
                 {
                     if (TEST_HEDGE0(testFrame,x,y))
@@ -12047,7 +12047,7 @@ bool SearchForLogoEdges(void)
         clogoMaxY = tlogoMaxY;
         memcpy(choriz_edgemask, thoriz_edgemask, width * height);
         memcpy(cvert_edgemask, tvert_edgemask, width * height);
-        logo_mask_loaded_width = width;
+        logo_mask_stride = width;
 
 
         logoTrendCounter = num_logo_buffers;
@@ -12295,17 +12295,17 @@ void DumpEdgeMasks(void)
         Debug(1, "%3d: ", y);
         for (x = clogoMinX; x <= clogoMaxX; x++)
         {
-            switch (choriz_edgemask[y * width + x])
+            switch (choriz_edgemask[MASK_INDEX(x, y)])
             {
             case 0:
-                if (cvert_edgemask[y * width + x] == 1)
+                if (cvert_edgemask[MASK_INDEX(x, y)] == 1)
                     outbuf[x-clogoMinX] =  '-';
                 else
                     outbuf[x-clogoMinX] =  ' ';
                 break;
 
             case 1:
-                if (cvert_edgemask[y * width + x] == 1)
+                if (cvert_edgemask[MASK_INDEX(x, y)] == 1)
                     outbuf[x-clogoMinX] =  '+';
                 else
                     outbuf[x-clogoMinX] =  '|';
@@ -12447,17 +12447,17 @@ void SaveLogoMaskData(void)
         {
             for (x = clogoMinX; x <= clogoMaxX; x++)
             {
-                switch (choriz_edgemask[y * width + x])
+                switch (choriz_edgemask[MASK_INDEX(x, y)])
                 {
                 case 0:
-                    if (cvert_edgemask[y * width + x] == 1)
+                    if (cvert_edgemask[MASK_INDEX(x, y)] == 1)
                         fprintf(logo_file, "-");
                     else
                         fprintf(logo_file, " ");
                     break;
 
                 case 1:
-                    if (cvert_edgemask[y * width + x] == 1)
+                    if (cvert_edgemask[MASK_INDEX(x, y)] == 1)
                         fprintf(logo_file, "+");
                     else
                         fprintf(logo_file, "|");
@@ -12477,7 +12477,7 @@ void SaveLogoMaskData(void)
         {
             for (x = clogoMinX; x <= clogoMaxX; x++)
             {
-                switch (choriz_edgemask[y * width + x])
+                switch (choriz_edgemask[MASK_INDEX(x, y)])
                 {
                 case 0:
                     fprintf(logo_file, " ");
@@ -12498,7 +12498,7 @@ void SaveLogoMaskData(void)
         {
             for (x = clogoMinX; x <= clogoMaxX; x++)
             {
-                switch (cvert_edgemask[y * width + x])
+                switch (cvert_edgemask[MASK_INDEX(x, y)])
                 {
                 case 0:
                     fprintf(logo_file, " ");
@@ -12550,6 +12550,14 @@ void LoadLogoMaskData(void)
         logoInfoAvailable = false;
         return;
     }
+    logo_mask_stride = width > 0 ? width : MAXWIDTH;
+    if (clogoMinX < 0 || clogoMinY < 0 || clogoMaxX < clogoMinX || clogoMaxY < clogoMinY
+            || clogoMaxX >= logo_mask_stride || clogoMaxY >= MAXHEIGHT)
+    {
+        Debug(0, "Logo file has an invalid logo area, ignoring it.\n");
+        logoInfoAvailable = false;
+        return;
+    }
 
     logo_file = myfopen(logofilename, "r");
     /*
@@ -12581,11 +12589,11 @@ void LoadLogoMaskData(void)
             switch (temp)
             {
             case ' ':
-                choriz_edgemask[y * MAXWIDTH + x] = 0;
+                choriz_edgemask[MASK_INDEX(x, y)] = 0;
                 break;
 
             case '|':
-                choriz_edgemask[y * MAXWIDTH + x] = 1;
+                choriz_edgemask[MASK_INDEX(x, y)] = 1;
                 break;
             }
         }
@@ -12607,11 +12615,11 @@ void LoadLogoMaskData(void)
             switch (temp)
             {
             case ' ':
-                cvert_edgemask[y * MAXWIDTH + x] = 0;
+                cvert_edgemask[MASK_INDEX(x, y)] = 0;
                 break;
 
             case '-':
-                cvert_edgemask[y * MAXWIDTH + x] = 1;
+                cvert_edgemask[MASK_INDEX(x, y)] = 1;
                 break;
             }
         }
@@ -12635,23 +12643,23 @@ void LoadLogoMaskData(void)
                 switch (temp)
                 {
                 case ' ':
-                    choriz_edgemask[y * MAXWIDTH + x] = 0;
-                    cvert_edgemask[y * MAXWIDTH + x] = 0;
+                    choriz_edgemask[MASK_INDEX(x, y)] = 0;
+                    cvert_edgemask[MASK_INDEX(x, y)] = 0;
                     break;
 
                 case '-':
-                    choriz_edgemask[y * MAXWIDTH + x] = 0;
-                    cvert_edgemask[y * MAXWIDTH + x] = 1;
+                    choriz_edgemask[MASK_INDEX(x, y)] = 0;
+                    cvert_edgemask[MASK_INDEX(x, y)] = 1;
                     break;
 
                 case '|':
-                    choriz_edgemask[y * MAXWIDTH + x] = 1;
-                    cvert_edgemask[y * MAXWIDTH + x] = 0;
+                    choriz_edgemask[MASK_INDEX(x, y)] = 1;
+                    cvert_edgemask[MASK_INDEX(x, y)] = 0;
                     break;
 
                 case '+':
-                    choriz_edgemask[y * MAXWIDTH + x] = 1;
-                    cvert_edgemask[y * MAXWIDTH + x] = 1;
+                    choriz_edgemask[MASK_INDEX(x, y)] = 1;
+                    cvert_edgemask[MASK_INDEX(x, y)] = 1;
                     break;
 
                 }
@@ -12661,7 +12669,6 @@ void LoadLogoMaskData(void)
     fclose(logo_file);
 
 
-    logo_mask_loaded_width = MAXWIDTH;
     logoInfoAvailable = true;
     startOverAfterLogoInfoAvail = true; // prevent continuous searching for logo when a logo file is specified
     secondLogoSearch = true;
