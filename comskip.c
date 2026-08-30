@@ -1582,7 +1582,7 @@ bool BuildBlocks(bool recalc)
     if (((commDetectMethod & LOGO) && cut_on_ar_change ) || cut_on_ar_change >= 2)
     {
 //	if (cut_on_ar_change ) {
-        for (i = 0; i < ar_block_count; i++)
+        for (i = 0; i + 1 < ar_block_count; i++)
         {
             if ((cut_on_ar_change == 1 || ar_block[i].volume < max_volume) &&
                     ar_block[i].ar_ratio != AR_UNDEF && ar_block[i+1].ar_ratio != AR_UNDEF)
