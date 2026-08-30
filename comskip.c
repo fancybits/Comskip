@@ -191,6 +191,15 @@ typedef struct
     int    xds;
     int cur_segment;
     int audio_channels;
+    // Scan state and raw measurements, written to the CSV.
+    int		videowidth;         // decoded frame width, not the padded stride
+    int		height;
+    float	fps;                // fps in effect when this frame was processed
+    int		pixels;             // scene-change / brightness / uniform denominator
+    int		volume_raw;         // measured volume before clipping; -1 = no audio measured
+    unsigned char key_frame;
+    unsigned char luma_p[5];    // 5/25/50/75/95th percentile of the sampled luma
+    unsigned char luma_wedge[4];// mean luma of the top/bottom/left/right scan wedges
 #ifdef FRAME_WITH_HISTOGRAM
     int		histogram[256];
 #endif
@@ -554,6 +563,7 @@ extern int						framenum;
 extern int64_t			initial_pts;
 extern int				initial_pts_set;
 extern char pict_type;
+extern char key_frame;
 
 int			ascr,scr;
 int						framenum_real;
@@ -3292,6 +3302,10 @@ int DetectCommercials(int f, double pts)
         pts = 0.0;
     frame[frame_count].pts = pts;
     frame[frame_count].pict_type = pict_type;
+    frame[frame_count].key_frame = key_frame;
+    frame[frame_count].videowidth = videowidth;
+    frame[frame_count].height = height;
+    frame[frame_count].fps = fps;
     if (frame_count == 1)
         frame[0].pts = pts;
 //    curvolume = retreive_frame_volume(get_frame_pts(frame_count-1), get_frame_pts(frame_count));
@@ -10445,6 +10459,36 @@ static int credit_count = 0;
 }
 
 
+// Sampled pixel count, luma percentiles and per-wedge mean luma for the CSV.
+// own_histogram[0] is filled by ScanBottom from y = border inward, so it is
+// the top wedge; [1] bottom, [2] left, [3] right.
+static void RecordLumaStats(long f)
+{
+    static const int pct[5] = {5, 25, 50, 75, 95};
+    long total = 0, acc = 0, sum;
+    int i, w, p = 0;
+
+    for (i = 0; i < 256; i++) total += histogram[i];
+    frame[f].pixels = total;
+    for (i = 0; i < 256 && p < 5; i++)
+    {
+        acc += histogram[i];
+        while (p < 5 && acc * 100 >= total * pct[p])
+            frame[f].luma_p[p++] = i;
+    }
+    for (w = 0; w < OWN_HISTOGRAM_WIDTH; w++)
+    {
+        sum = 0;
+        total = 0;
+        for (i = 0; i < 256; i++)
+        {
+            total += own_histogram[w][i];
+            sum += (long)own_histogram[w][i] * i;
+        }
+        frame[f].luma_wedge[w] = total ? sum / total : 0;
+    }
+}
+
 bool CheckSceneHasChanged(void)
 {
     register int		i;
@@ -10522,6 +10566,7 @@ bool CheckSceneHasChanged(void)
     for (i = 0; i < 256; i++) {
         histogram[i] = own_histogram[0][i] + own_histogram[1][i] + own_histogram[2][i] + own_histogram[3][i];
     }
+    if (framearray) RecordLumaStats(frame_count);
 
 #ifdef FRAME_WITH_HISTOGRAM
     if (framearray) memcpy(frame[frame_count].histogram, histogram, sizeof(histogram));
@@ -13920,6 +13965,69 @@ return;
 
 
 
+// CSV columns in file order. The first 19 are the legacy layout, parsed by
+// position; the rest are appended so old readers still work.
+enum csv_col
+{
+    CSV_FRAME, CSV_BRIGHTNESS, CSV_SCENE_CHANGE, CSV_LOGO, CSV_UNIFORM, CSV_SOUND,
+    CSV_MINY, CSV_MAXY, CSV_AR_RATIO, CSV_GOODEDGE, CSV_ISBLACK, CSV_CUTSCENE,
+    CSV_MINX, CSV_MAXX, CSV_HASBRIGHT, CSV_DIMCOUNT, CSV_PTS, CSV_CUR_SEGMENT,
+    CSV_AUDIO_CHANNELS,
+    CSV_VIDEOWIDTH, CSV_HEIGHT, CSV_FPS, CSV_PIXELS, CSV_PICT_TYPE, CSV_KEY_FRAME,
+    CSV_VOLUME_RAW, CSV_LUMA_P5, CSV_LUMA_P25, CSV_LUMA_P50, CSV_LUMA_P75, CSV_LUMA_P95,
+    CSV_LUMA_TOP, CSV_LUMA_BOTTOM, CSV_LUMA_LEFT, CSV_LUMA_RIGHT,
+    CSV_COLUMNS,
+    CSV_UNKNOWN = -1
+};
+
+static const char *csv_col_name[CSV_COLUMNS] =
+{
+    "frame", "brightness", "scene_change", "logo", "uniform", "sound",
+    "minY", "MaxY", "ar_ratio", "goodEdge", "isblack", "cutscene",
+    "MinX", "MaxX", "hasBright", "Dimcount", "PTS", "cur_segment",
+    "audio_channels",
+    "videowidth", "height", "fps", "pixels", "pict_type", "key_frame",
+    "volume_raw", "luma_p5", "luma_p25", "luma_p50", "luma_p75", "luma_p95",
+    "luma_top", "luma_bottom", "luma_left", "luma_right",
+};
+
+// Map a header line onto csv_col by name. Returns 0 for the legacy header,
+// which is parsed by position and carries the fps value in its last slot.
+static int ParseCSVHeader(const char *line, int *colmap, int max)
+{
+    int n = 0, i;
+    char name[64];
+    const char *p = line;
+
+    // The legacy header ends in the fps value; a named one ends in a name.
+    {
+        const char *e = line + strlen(line);
+        while (e > line && (e[-1] == '\n' || e[-1] == '\r' || e[-1] == ' ')) e--;
+        while (e > line && e[-1] != ',') e--;
+        char *end;
+        strtod(e, &end);
+        if (end > e)
+            return 0;
+    }
+    while (*p && n < max)
+    {
+        int len = 0;
+        while (*p == ' ') p++;
+        while (*p && *p != ',' && *p != '\n' && *p != '\r' && len < (int)sizeof(name) - 1)
+            name[len++] = *p++;
+        while (len > 0 && name[len-1] == ' ') len--;
+        name[len] = '\0';
+        colmap[n] = CSV_UNKNOWN;
+        for (i = 0; i < CSV_COLUMNS; i++)
+            if (strcmp(name, csv_col_name[i]) == 0)
+                colmap[n] = i;
+        n++;
+        if (*p == ',') p++;
+        else break;
+    }
+    return n;
+}
+
 void OutputFrameArray(bool screenOnly)
 {
     int		i;
@@ -13944,7 +14052,9 @@ void OutputFrameArray(bool screenOnly)
         Debug(1, "Could not open raw output file.\n");
         return;
     }
-    fprintf(raw, "sep=,\nframe,brightness,scene_change,logo,uniform,sound,minY,MaxY,ar_ratio,goodEdge,isblack,cutscene, MinX, MaxX, hasBright, Dimcount,PTS,%f",fps);
+    fprintf(raw, "sep=,\n");
+    for (i = 0; i < CSV_COLUMNS; i++)
+        fprintf(raw, "%s%s", i ? "," : "", csv_col_name[i]);
 //	for (k = 0; k < 32; k++) {
 //		fprintf(raw, ",b%3i", k);
 //	}
@@ -13962,13 +14072,21 @@ void OutputFrameArray(bool screenOnly)
         }
         else
         {
-            fprintf(raw, "%i,%i,%i,%i,%i,%i,%i,%i,%f,%f,%i,%i,%i,%i,%i,%i,%f,%i,%i",
+            fprintf(raw, "%i,%i,%i,%i,%i,%i,%i,%i,%f,%f,%i,%i,%i,%i,%i,%i,%.9f,%i,%i",
                     i, frame[i].brightness, frame[i].schange_percent*5, frame[i].logo_present,
                     frame[i].uniform, frame[i].volume,  frame[i].minY,frame[i].maxY,frame[i].ar_ratio,
                     frame[i].currentGoodEdge, frame[i].isblack,frame[i].cutscenematch,
                     frame[i].minX, frame[i].maxX, frame[i].hasBright, frame[i].dimCount, frame[i].pts,
                     frame[i].cur_segment, frame[i].audio_channels
                    );
+            fprintf(raw, ",%i,%i,%.6f,%i,%c,%i,",
+                    frame[i].videowidth, frame[i].height, frame[i].fps, frame[i].pixels,
+                    frame[i].pict_type, frame[i].key_frame);
+            if (frame[i].volume_raw >= 0)
+                fprintf(raw, "%i", frame[i].volume_raw);
+            fprintf(raw, ",%i,%i,%i,%i,%i,%i,%i,%i,%i",
+                    frame[i].luma_p[0], frame[i].luma_p[1], frame[i].luma_p[2], frame[i].luma_p[3], frame[i].luma_p[4],
+                    frame[i].luma_wedge[0], frame[i].luma_wedge[1], frame[i].luma_wedge[2], frame[i].luma_wedge[3]);
 #ifdef FRAME_WITH_HISTOGRAM
             for (k = 0; k < 32; k++)
             {
@@ -14010,6 +14128,14 @@ void InitializeFrameArray(long i)
     frame[i].minY = 0;
     frame[i].maxY = 0;
     frame[i].isblack = 0;
+    frame[i].videowidth = 0;
+    frame[i].height = 0;
+    frame[i].fps = 0;
+    frame[i].pixels = 0;
+    frame[i].volume_raw = -1;
+    frame[i].key_frame = 0;
+    memset(frame[i].luma_p, 0, sizeof(frame[i].luma_p));
+    memset(frame[i].luma_wedge, 0, sizeof(frame[i].luma_wedge));
     if (i > 0)
         frame[i].xds = frame[i-1].xds;
     else
@@ -14173,6 +14299,9 @@ void ProcessCSV(FILE *in_file)
     int		f;
     int		col;
     int		ccDataFrame;
+    int		colmap[128];
+    int		named_cols = 0;
+    int		has_scan_state = false;
 
 //	time_t	ltime;
 again:
@@ -14183,9 +14312,17 @@ again:
         exit(22);
     }
     fgets(line, sizeof(line), in_file); // Skip first line
-    if (strcmp(line,"sep=,\n")==0)
+    if (strncmp(line,"sep=,",5)==0)
         fgets(line, sizeof(line), in_file); // Skip second line
+    for (i = 0; i < (int)(sizeof(colmap)/sizeof(colmap[0])); i++)
+        colmap[i] = CSV_UNKNOWN;
+    named_cols = ParseCSVHeader(line, colmap, sizeof(colmap)/sizeof(colmap[0]));
+    if (named_cols == 0)
+        for (i = 0; i < CSV_AUDIO_CHANNELS + 1; i++)
+            colmap[i] = i;
     t = 0.0;
+    if (named_cols == 0)
+    {
     if (line[85] == ';') line [85] = '+';
     if (strlen(line) > 85)
     {
@@ -14225,6 +14362,7 @@ again:
             }
         }
     }
+    } // legacy header
     InitComSkip();
     frame_count = 1;
     pict_type = '?';
@@ -14257,9 +14395,9 @@ again:
                 split[x] = '\0';
 
                 // printf("col = %i\t", col);
-                switch (col)
+                switch (col < (int)(sizeof(colmap)/sizeof(colmap[0])) && (named_cols == 0 || col < named_cols) ? colmap[col] : CSV_UNKNOWN)
                 {
-                case 0:
+                case CSV_FRAME:
                     f = strtol(split, NULL, 10);
                     if (f!= frame_count)
                     {
@@ -14268,79 +14406,107 @@ again:
                     }
                     break;
 
-                case 1:
+                case CSV_BRIGHTNESS:
                     frame[frame_count].brightness = strtol(split, NULL, 10);
                     break;
 
-                case 2:
+                case CSV_SCENE_CHANGE:
                     frame[frame_count].schange_percent = strtol(split, NULL, 10)/5;
                     break;
 
-                case 3:
+                case CSV_LOGO:
                     frame[frame_count].logo_present = strtol(split, NULL, 10);
                     break;
 
-                case 4:
+                case CSV_UNIFORM:
                     frame[frame_count].uniform = strtol(split, NULL, 10);
                     break;
-                case 5:
+                case CSV_SOUND:
                     frame[frame_count].volume = strtol(split, NULL, 10);
                     break;
-                case 6:
+                case CSV_MINY:
                     frame[frame_count].minY = strtol(split, NULL, 10);
                     if (minminY > frame[frame_count].minY) minminY = frame[frame_count].minY;
                     break;
-                case 7:
+                case CSV_MAXY:
                     frame[frame_count].maxY = strtol(split, NULL, 10);
                     if (maxmaxY < frame[frame_count].maxY) maxmaxY = frame[frame_count].maxY;
                     break;
-                case 8:
+                case CSV_AR_RATIO:
                     frame[frame_count].ar_ratio = strtod(split, NULL);
                     // Handle files that are before the values was written as a double
                     if (strchr(split, '.') == NULL) {
                         frame[frame_count].ar_ratio /= 100;
                     }
                     break;
-                case 9:
+                case CSV_GOODEDGE:
                     frame[frame_count].currentGoodEdge = strtod(split, NULL);
                     // Handle files that are before the values was written as a double
                     if (strchr(split, '.') == NULL) {
                         frame[frame_count].currentGoodEdge /= 500;
                     }
                     break;
-                case 10:
+                case CSV_ISBLACK:
                     frame[frame_count].isblack = strtol(split, NULL, 10);
                     if (!(frame[frame_count].isblack == 0 || frame[frame_count].isblack == 1))
                         old_format = false;
                     break;
-                case 11:
+                case CSV_CUTSCENE:
                     frame[frame_count].cutscenematch = strtol(split, NULL, 10);
                     if ( frame[frame_count].cutscenematch>0 ) cutscene_nonzero_count++;
                     break;
-                case 12:
+                case CSV_MINX:
                     frame[frame_count].minX = strtol(split, NULL, 10);
                     if (minminX > frame[frame_count].minX) minminX = frame[frame_count].minX;
                     break;
-                case 13:
+                case CSV_MAXX:
                     frame[frame_count].maxX = strtol(split, NULL, 10);
                     if (maxmaxX < frame[frame_count].maxX) maxmaxX = frame[frame_count].maxX;
                     break;
-                case 14:
+                case CSV_HASBRIGHT:
                     frame[frame_count].hasBright = strtol(split, NULL, 10);
                     break;
-                case 15:
+                case CSV_DIMCOUNT:
                     frame[frame_count].dimCount = strtol(split, NULL, 10);
                     break;
-                case 16:
+                case CSV_PTS:
                     frame[frame_count].pts = strtod(split, NULL);
                     break;
-                case 17:
+                case CSV_CUR_SEGMENT:
                     frame[frame_count].cur_segment = strtol(split, NULL, 10);
                     break;
-                case 18:
+                case CSV_AUDIO_CHANNELS:
                     frame[frame_count].audio_channels = strtol(split, NULL, 10);
                     break;
 
+
+                case CSV_VIDEOWIDTH:
+                    frame[frame_count].videowidth = strtol(split, NULL, 10);
+                    break;
+                case CSV_HEIGHT:
+                    frame[frame_count].height = strtol(split, NULL, 10);
+                    break;
+                case CSV_FPS:
+                    frame[frame_count].fps = strtod(split, NULL);
+                    break;
+                case CSV_PIXELS:
+                    frame[frame_count].pixels = strtol(split, NULL, 10);
+                    break;
+                case CSV_PICT_TYPE:
+                    frame[frame_count].pict_type = split[0] ? split[0] : '?';
+                    break;
+                case CSV_KEY_FRAME:
+                    frame[frame_count].key_frame = strtol(split, NULL, 10);
+                    break;
+                case CSV_VOLUME_RAW:
+                    frame[frame_count].volume_raw = split[0] ? strtol(split, NULL, 10) : -1;
+                    break;
+                case CSV_LUMA_P5: case CSV_LUMA_P25: case CSV_LUMA_P50: case CSV_LUMA_P75: case CSV_LUMA_P95:
+                    frame[frame_count].luma_p[colmap[col] - CSV_LUMA_P5] = strtol(split, NULL, 10);
+                    break;
+                case CSV_LUMA_TOP: case CSV_LUMA_BOTTOM: case CSV_LUMA_LEFT: case CSV_LUMA_RIGHT:
+                    frame[frame_count].luma_wedge[colmap[col] - CSV_LUMA_TOP] = strtol(split, NULL, 10);
+                    break;
 
                 default:
 #ifdef FRAME_WITH_HISTOGRAM
@@ -14387,6 +14553,20 @@ again:
 
     height = maxmaxY + minminY;
     videowidth = width = maxmaxX + minminX;
+    if (named_cols > 0)
+    {
+        has_scan_state = frame[1].videowidth > 0 && frame[1].height > 0;
+        if (has_scan_state)
+        {
+            videowidth = width = frame[1].videowidth;
+            height = frame[1].height;
+        }
+        if (has_scan_state && frame[1].fps > 0)
+            fps = frame[1].fps;
+        else if (frame_count > 2 && frame[frame_count-1].pts > frame[1].pts)
+            fps = (frame_count - 2) / (frame[frame_count-1].pts - frame[1].pts);
+        Debug(8, "CSV %s scan state: %dx%d at %5.3f fps\n", has_scan_state ? "carries" : "lacks", videowidth, height, fps);
+    }
 
     last_brightness = frame[1].brightness;
     Debug(8, "CSV file loaded into memory.\n");
@@ -14478,6 +14658,20 @@ ccagain:
         }
 
 
+        if (has_scan_state && frame[i].videowidth > 0 && frame[i].height > 0)
+        {
+            if (videowidth != frame[i].videowidth || height != frame[i].height)
+            {
+                Debug(7, "Frame %6i - CSV resolution change to %d x %d\n", i, frame[i].videowidth, frame[i].height);
+                videowidth = width = frame[i].videowidth;
+                height = frame[i].height;
+            }
+            if (frame[i].fps > 0 && fabs(frame[i].fps - fps) > 0.001)
+            {
+                fps = frame[i].fps;
+                Debug(7, "Frame %6i - CSV frame rate change to %5.3f f/s\n", i, fps);
+            }
+        }
         if (frame[i].maxX == 0)
         {
             if (i == 1)
@@ -16469,6 +16663,14 @@ void ClearVolumeBuffer ()
     max_fill = 0;
 }
 */
+
+// Unclipped, ungated volume for the CSV; the detector keeps using set_frame_volume.
+void set_frame_volume_raw(unsigned int f, int volume)
+{
+    if (!initialized || !framearray) return;
+    if (f > 0 && f <= (unsigned int)frame_count)
+        frame[f].volume_raw = volume;
+}
 
 void set_frame_volume(unsigned int f, int volume)
 {
