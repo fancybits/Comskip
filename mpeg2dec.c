@@ -270,6 +270,7 @@ int soft_seeking=0;
 extern char	inbasename[];
 
 char pict_type;
+char key_frame;
 
 char tempstring[512];
 //test
@@ -378,6 +379,7 @@ extern int get_samplerate();
 extern int get_channels();
 extern void add_volumes(int *volumes, int nr_frames);
 extern void set_frame_volume(uint32_t framenr, int volume);
+extern void set_frame_volume_raw(uint32_t framenr, int volume);
 
 extern double get_frame_pts(int f);
 
@@ -417,10 +419,12 @@ void list_codecs()
 }
 
 
-int retreive_frame_volume(double from_pts, double to_pts)
+// raw receives the unclipped measurement, or -1 when no audio covered the window.
+int retreive_frame_volume(double from_pts, double to_pts, int *raw)
 {
     short *buffer;
     int volume = -1;
+    *raw = -1;
     VideoState *is = global_video_state;
     int i;
     double calculated_delay;
@@ -444,6 +448,7 @@ int retreive_frame_volume(double from_pts, double to_pts)
             buffer++;
         }
         volume = volume/s_per_frame;
+        *raw = volume;
         DUMP_TIMING("a  read", is->audio_clock, to_pts, from_pts, (double)volume, s_per_frame);
 
         audio_samples -= (int)((from_pts - base_apts) * (is->audio_st->codecpar->sample_rate+0.5)); // incomplete frame before complete frame
@@ -488,7 +493,7 @@ int retreive_frame_volume(double from_pts, double to_pts)
 void backfill_frame_volumes()
 {
     int f;
-    int volume;
+    int volume, raw;
     double local_initial_pts = initial_pts;
     if (framenum < 3)
         return;
@@ -498,7 +503,8 @@ void backfill_frame_volumes()
     while (get_frame_pts(f) + local_initial_pts > base_apts && f > 1) // Find first frame with samples available, could be incomplete
         f--;
     while (f < framenum-1 && (get_frame_pts(f+1) + local_initial_pts )<= top_apts && (top_apts - base_apts) > .2 /* && get_frame_pts(f-1) >= base_apts */) {
-        volume = retreive_frame_volume(fmax(get_frame_pts(f) + local_initial_pts , base_apts), get_frame_pts(f+1) + local_initial_pts);
+        volume = retreive_frame_volume(fmax(get_frame_pts(f) + local_initial_pts , base_apts), get_frame_pts(f+1) + local_initial_pts, &raw);
+        if (raw > -1) set_frame_volume_raw(f, raw);
         if (volume > -1) set_frame_volume(f, volume);
         f++;
     }
@@ -1062,6 +1068,11 @@ int SubmitFrame(AVStream        *video_st, AVFrame         *pFrame , double pts)
         pict_type = 'I';
     else
         pict_type = 'P';
+#ifdef AV_FRAME_FLAG_KEY
+    key_frame = (pFrame->flags & AV_FRAME_FLAG_KEY) ? 1 : 0;
+#else
+    key_frame = pFrame->key_frame ? 1 : 0;
+#endif
 
     if (selftest == 2 && framenum == 0 && pass == 0 && test_pts == 0.0) //Reset file test
         test_pts = pts;
