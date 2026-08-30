@@ -1020,9 +1020,12 @@ int SubmitFrame(AVStream        *video_st, AVFrame         *pFrame , double pts)
     int res=0;
     int changed = 0;
     int line = 0;
+    const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(pFrame->format);
 
-    if (pFrame->format == AV_PIX_FMT_YUV420P10LE) {
-        line = 1;
+    if (!desc || desc->comp[0].depth != 8) {
+        Debug(1, "Panic: frame format %s is not 8-bit\n", desc ? desc->name : "?");
+        frame_ptr = NULL;
+        return(0);
     }
 
 //	bitrate = pFrame->bit_rate;
@@ -1387,17 +1390,29 @@ static int    prev_strange_framenum = 0;
     while ((len1 = avcodec_receive_frame(is->dec_ctx, is->pFrame)) >= 0)
     {
         frameFinished = 1;
-        // convert to 8bit
-        if (is->pFrame->format == AV_PIX_FMT_YUV420P10LE) {
+        // convert anything without 8-bit luma to 8-bit
+        const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(is->pFrame->format);
+        if (desc && desc->comp[0].depth != 8) {
             is->img_convert_ctx = sws_getCachedContext(is->img_convert_ctx, is->pFrame->width, is->pFrame->height, is->pFrame->format, is->pFrame->width, is->pFrame->height, AV_PIX_FMT_YUV420P, SWS_POINT, NULL, NULL, NULL);
             AVFrame *newframe = av_frame_alloc();
+            if (!is->img_convert_ctx || !newframe) {
+                Debug(1, "Cannot convert %s frames to 8-bit\n", desc->name);
+                av_frame_free(&newframe);
+                av_frame_unref(is->pFrame);
+                continue;
+            }
             av_frame_copy_props(newframe, is->pFrame);
             newframe->format = AV_PIX_FMT_YUV420P;
             newframe->width = is->pFrame->width;
             newframe->height = is->pFrame->height;
-            av_frame_get_buffer(newframe, 0);
+            if (av_frame_get_buffer(newframe, 0) < 0) {
+                Debug(1, "Cannot allocate an 8-bit frame\n");
+                av_frame_free(&newframe);
+                av_frame_unref(is->pFrame);
+                continue;
+            }
             sws_scale(is->img_convert_ctx, (const uint8_t * const *)is->pFrame->data, is->pFrame->linesize, 0, is->pFrame->height, newframe->data, newframe->linesize);
-            av_frame_unref(is->pFrame);
+            av_frame_free(&is->pFrame);
             is->pFrame = newframe;
         }
 
