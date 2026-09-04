@@ -404,7 +404,38 @@ extern void InitializeCCTextArray(long i);
 
 void add_cc_text(long start_frame, long end_frame, const char *text)
 {
+    char normalized[sizeof(cc_text[0].text)];
+    size_t len;
+    size_t i;
+
     if (cc_text == NULL) return;
+
+    // Replace newlines with spaces so the log stays line-oriented.
+    strncpy(normalized, text, sizeof(normalized) - 1);
+    normalized[sizeof(normalized) - 1] = '\0';
+    len = strlen(normalized);
+    for (i = 0; i < len; i++)
+        if (normalized[i] == '\n' || normalized[i] == '\r') normalized[i] = ' ';
+
+    // The encoder re-sends a cue two or three times while it is held on screen,
+    // each repeat separated from the last by an empty cue that end_cc_text()
+    // has already closed the entry on. Appending every repeat splits one
+    // caption into several short entries, so fold a repeat back into the entry
+    // it repeats and re-open that entry: the next distinct cue, or
+    // end_cc_text(), then closes it at the frame the caption left the screen.
+    //
+    // Only a contiguous repeat folds. Across one recording, 1170 of the 1173
+    // adjacent identical pairs resumed exactly one frame after the previous
+    // entry ended and one resumed two frames after; the single pair that was a
+    // genuine re-display of the same line resumed 61 frames later.
+    if (cc_text_count > 0 &&
+            strcmp((char*)cc_text[cc_text_count - 1].text, normalized) == 0 &&
+            (cc_text[cc_text_count - 1].end_frame < 0 ||
+             start_frame - cc_text[cc_text_count - 1].end_frame <= 2))
+    {
+        cc_text[cc_text_count - 1].end_frame = end_frame;
+        return;
+    }
 
     // Set end_frame of previous entry if it wasn't explicitly set
     if (cc_text_count > 0 && cc_text[cc_text_count - 1].end_frame < 0) {
@@ -416,16 +447,20 @@ void add_cc_text(long start_frame, long end_frame, const char *text)
 
     cc_text[cc_text_count].start_frame = start_frame;
     cc_text[cc_text_count].end_frame = end_frame;
-    cc_text[cc_text_count].text_len = strnlen(text, sizeof(cc_text[cc_text_count].text) - 1);
-    strncpy((char*)cc_text[cc_text_count].text, text, sizeof(cc_text[cc_text_count].text) - 1);
-    cc_text[cc_text_count].text[sizeof(cc_text[cc_text_count].text) - 1] = '\0';
-    {
-        // Replace newlines with spaces so the log stays line-oriented.
-        unsigned char *p;
-        for (p = cc_text[cc_text_count].text; *p; p++)
-            if (*p == '\n' || *p == '\r') *p = ' ';
-    }
+    cc_text[cc_text_count].text_len = len;
+    memcpy(cc_text[cc_text_count].text, normalized, len + 1);
     cc_text_count++;
+
+    // Every 608 site in AddCC() leaves cc_text[cc_text_count] as an
+    // initialized in-progress entry. A recording can carry both an xVTT
+    // subtitle stream and in-band 608 captions, and then AddCC() reads
+    // cc_text[cc_text_count].text_len right after we return: without this the
+    // slot holds uninitialized realloc'd heap and the length indexes text[]
+    // out of bounds.
+    InitializeCCTextArray(cc_text_count);
+    if (cc_text == NULL) return;
+    cc_text[cc_text_count].start_frame = start_frame;
+    cc_text[cc_text_count].end_frame = -1;
 }
 
 void end_cc_text(long end_frame)
@@ -15200,6 +15235,34 @@ void AddXDS(unsigned char hi, unsigned char lo)
     }
 }
 
+// Close the 608 entry being accumulated at cc_text[cc_text_count] and start a
+// new one at current_frame.
+//
+// A recording can carry an xVTT subtitle stream and in-band 608 captions at the
+// same time, and both write cc_text. The xVTT cues are the more faithful
+// transcript -- the 608 decoder joins rollup rows without a space, doubles
+// spaces around apostrophes, and drops the characters missing from charmap --
+// so when they are present the 608 text is dropped instead of published. The
+// entry is reset rather than counted, which leaves everything else AddCC does
+// (cc_block, current_cc_type, cc_on_screen) untouched.
+static void finish_cc_text_entry(long current_frame)
+{
+    if (have_xvtt_subtitles)
+    {
+        cc_text[cc_text_count].start_frame = current_frame;
+        cc_text[cc_text_count].end_frame = -1;
+        cc_text[cc_text_count].text[0] = '\0';
+        cc_text[cc_text_count].text_len = 0;
+        return;
+    }
+
+    cc_text[cc_text_count].end_frame = current_frame - 1;
+    cc_text_count++;
+    InitializeCCTextArray(cc_text_count);
+    cc_text[cc_text_count].start_frame = current_frame;
+    cc_text[cc_text_count].text_len = 0;
+}
+
 void AddCC(int i)
 {
     bool			tempBool;
@@ -15431,11 +15494,7 @@ void AddCC(int i)
     if (((!isalpha(cc_text[cc_text_count].text[cc_text[cc_text_count].text_len - 1])) && (cc_text[cc_text_count].text_len > 200)) ||
             (cc_text[cc_text_count].text_len > 245))
     {
-        cc_text[cc_text_count].end_frame = current_frame - 1;
-        cc_text_count++;
-        InitializeCCTextArray(cc_text_count);
-        cc_text[cc_text_count].start_frame = current_frame;
-        cc_text[cc_text_count].text_len = 0;
+        finish_cc_text_entry(current_frame);
     }
 
     if (cc.cc1[0] == 0x14)
@@ -15450,11 +15509,7 @@ void AddCC(int i)
         {
         case 0x20:
             Debug(11, "Frame - %6i Control Code Found:\tResume Caption Loading\n", current_frame);
-            cc_text[cc_text_count].end_frame = current_frame - 1;
-            cc_text_count++;
-            InitializeCCTextArray(cc_text_count);
-            cc_text[cc_text_count].start_frame = current_frame;
-            cc_text[cc_text_count].text_len = 0;
+            finish_cc_text_entry(current_frame);
             last_cc_type = POPON;
             current_cc_type = POPON;
             AddNewCCBlock(current_frame, current_cc_type, cc_on_screen, cc_in_memory);
@@ -15482,11 +15537,7 @@ void AddCC(int i)
 
         case 0x25:
             Debug(11, "Frame - %6i Control Code Found:\tRoll Up Captions 2 row\n", current_frame);
-            cc_text[cc_text_count].end_frame = current_frame - 1;
-            cc_text_count++;
-            InitializeCCTextArray(cc_text_count);
-            cc_text[cc_text_count].start_frame = current_frame;
-            cc_text[cc_text_count].text_len = 0;
+            finish_cc_text_entry(current_frame);
             last_cc_type = ROLLUP;
             current_cc_type = ROLLUP;
             AddNewCCBlock(current_frame, current_cc_type, cc_on_screen, cc_in_memory);
@@ -15494,11 +15545,7 @@ void AddCC(int i)
 
         case 0x26:
             Debug(11, "Frame - %6i Control Code Found:\tRoll Up Captions 3 row\n", current_frame);
-            cc_text[cc_text_count].end_frame = current_frame - 1;
-            cc_text_count++;
-            InitializeCCTextArray(cc_text_count);
-            cc_text[cc_text_count].start_frame = current_frame;
-            cc_text[cc_text_count].text_len = 0;
+            finish_cc_text_entry(current_frame);
             last_cc_type = ROLLUP;
             current_cc_type = ROLLUP;
             AddNewCCBlock(current_frame, current_cc_type, cc_on_screen, cc_in_memory);
@@ -15506,11 +15553,7 @@ void AddCC(int i)
 
         case 0x27:
             Debug(11, "Frame - %6i Control Code Found:\tRoll Up Captions 4 row\n", current_frame);
-            cc_text[cc_text_count].end_frame = current_frame - 1;
-            cc_text_count++;
-            InitializeCCTextArray(cc_text_count);
-            cc_text[cc_text_count].start_frame = current_frame;
-            cc_text[cc_text_count].text_len = 0;
+            finish_cc_text_entry(current_frame);
             last_cc_type = ROLLUP;
             current_cc_type = ROLLUP;
             AddNewCCBlock(current_frame, current_cc_type, cc_on_screen, cc_in_memory);
@@ -15523,11 +15566,7 @@ void AddCC(int i)
 
         case 0x29:
             Debug(11, "Frame - %6i Control Code Found:\tResume Direct Captioning\n", current_frame);
-            cc_text[cc_text_count].end_frame = current_frame - 1;
-            cc_text_count++;
-            InitializeCCTextArray(cc_text_count);
-            cc_text[cc_text_count].start_frame = current_frame;
-            cc_text[cc_text_count].text_len = 0;
+            finish_cc_text_entry(current_frame);
             last_cc_type = PAINTON;
             current_cc_type = PAINTON;
             AddNewCCBlock(current_frame, current_cc_type, cc_on_screen, cc_in_memory);
@@ -15545,11 +15584,7 @@ void AddCC(int i)
 
         case 0x2C:
             Debug(11, "Frame - %6i Control Code Found:\tErase Displayed Memory\n", current_frame);
-            cc_text[cc_text_count].end_frame = current_frame - 1;
-            cc_text_count++;
-            InitializeCCTextArray(cc_text_count);
-            cc_text[cc_text_count].start_frame = current_frame;
-            cc_text[cc_text_count].text_len = 0;
+            finish_cc_text_entry(current_frame);
             cc_on_screen = false;
             current_cc_type = NONE;
             AddNewCCBlock(current_frame, current_cc_type, cc_on_screen, cc_in_memory);
@@ -15560,11 +15595,7 @@ void AddCC(int i)
             // Found:\tCarriage Return\n", current_frame);
             if (cc_text[cc_text_count].text_len > 200)
             {
-                cc_text[cc_text_count].end_frame = current_frame - 1;
-                cc_text_count++;
-                InitializeCCTextArray(cc_text_count);
-                cc_text[cc_text_count].start_frame = current_frame;
-                cc_text[cc_text_count].text_len = 0;
+                finish_cc_text_entry(current_frame);
             }
 
             cc_text[cc_text_count].text[cc_text[cc_text_count].text_len] = ' ';
@@ -15589,11 +15620,7 @@ void AddCC(int i)
                 cc_in_memory,
                 cc_on_screen
             );
-            cc_text[cc_text_count].end_frame = current_frame - 1;
-            cc_text_count++;
-            InitializeCCTextArray(cc_text_count);
-            cc_text[cc_text_count].start_frame = current_frame;
-            cc_text[cc_text_count].text_len = 0;
+            finish_cc_text_entry(current_frame);
             tempBool = cc_in_memory;
             cc_in_memory = cc_on_screen;
             cc_on_screen = tempBool;
@@ -15616,11 +15643,7 @@ void AddCC(int i)
             Debug(11, "\nFrame - %6i Control Code Found:\tUnknown code!! - %2X\n", current_frame, cc.cc1[1]);
             if (cc_text[cc_text_count].text_len > 200)
             {
-                cc_text[cc_text_count].end_frame = current_frame - 1;
-                cc_text_count++;
-                InitializeCCTextArray(cc_text_count);
-                cc_text[cc_text_count].start_frame = current_frame;
-                cc_text[cc_text_count].text_len = 0;
+                finish_cc_text_entry(current_frame);
             }
 
             cc_text[cc_text_count].text[cc_text[cc_text_count].text_len] = ' ';
