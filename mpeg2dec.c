@@ -43,6 +43,7 @@ double test_pts = 0.0;
 //#include <libavcodec/ac3dec.h>
 #include <libavutil/avutil.h>
 #include <libavutil/pixdesc.h>
+#include <libavutil/hwcontext.h>
 #include <libavutil/samplefmt.h>
 #include <libswscale/swscale.h>
 
@@ -82,6 +83,13 @@ extern int      use_cuvid;
 extern int      use_vdpau;
 extern int      use_dxva2;
 extern int      use_qsv;
+extern int      use_vaapi;
+extern const char *vaapi_device;
+static AVBufferRef *vaapi_device_ctx = NULL;
+static AVFrame     *vaapi_sw_frame = NULL;  // scratch frame for GPU -> system memory downloads
+static int          vaapi_reported = 0;
+static int          vaapi_failures = 0;
+#define VAAPI_MAX_FAILURES 25
 extern int      have_xvtt_subtitles;
 extern void     add_cc_text(long start, long end, const char *text);
 extern void     end_cc_text(long end_frame);
@@ -1401,6 +1409,40 @@ static int    prev_strange_framenum = 0;
     while ((len1 = avcodec_receive_frame(is->dec_ctx, is->pFrame)) >= 0)
     {
         frameFinished = 1;
+        // libavcodec only decides on the first frame whether the VA-API
+        // hwaccel is used or it falls back to software; report which.
+        if (is->dec_ctx->hw_device_ctx && !vaapi_reported) {
+            vaapi_reported = 1;
+            if (is->pFrame->format == AV_PIX_FMT_VAAPI)
+                Debug(1, "VA-API decoding active for %s\n", is->dec_ctx->codec->name);
+            else
+                Debug(1, "VA-API not available for this %s stream, decoding in software\n", is->dec_ctx->codec->name);
+        }
+        // VA-API frames live in GPU memory: download them (NV12, or P010 for
+        // 10-bit) before analysis. Only the luma plane is used downstream.
+        if (is->pFrame->format == AV_PIX_FMT_VAAPI) {
+            int err;
+            if (!vaapi_sw_frame && !(vaapi_sw_frame = av_frame_alloc()))
+                err = AVERROR(ENOMEM);
+            else {
+                av_frame_unref(vaapi_sw_frame);
+                err = av_hwframe_transfer_data(vaapi_sw_frame, is->pFrame, 0);
+                if (err >= 0)
+                    err = av_frame_copy_props(vaapi_sw_frame, is->pFrame);
+            }
+            if (err < 0) {
+                Debug(0, "Cannot download VA-API frame (%s)\n", av_err2str(err));
+                av_frame_unref(is->pFrame);
+                if (++vaapi_failures >= VAAPI_MAX_FAILURES) {
+                    Debug(0, "Too many VA-API frame download failures, aborting. Retry without --vaapi\n");
+                    exit(-1);
+                }
+                continue;
+            }
+            vaapi_failures = 0;
+            av_frame_unref(is->pFrame);
+            av_frame_move_ref(is->pFrame, vaapi_sw_frame);
+        }
         // convert anything without 8-bit luma to 8-bit
         const AVPixFmtDescriptor *desc = av_pix_fmt_desc_get(is->pFrame->format);
         if (desc && desc->comp[0].depth != 8) {
@@ -1956,6 +1998,37 @@ int stream_component_open(VideoState *is, int stream_index)
     // to an out-of-bounds write and SIGSEGV.
     if (codec && codecCtx->codec_type == AVMEDIA_TYPE_VIDEO)
         codecCtx->lowres = min(codec->max_lowres, lowres);
+
+    // VA-API: attach a device to the native decoder; libavcodec's default
+    // get_format then picks the VAAPI hwaccel when the GPU supports the
+    // codec/profile and falls back to software decoding when it does not
+    // (e.g. no MPEG-2 on newer AMD GPUs). Not combined with a dedicated
+    // hardware decoder (--qsv/--cuvid/...), which expects its own device
+    // type, nor with lowres, which hwaccels do not implement.
+    if (use_vaapi && codecCtx->codec_type == AVMEDIA_TYPE_VIDEO) {
+        if (codec_hw) {
+            Debug(0, "VA-API not used: %s decoder already selected\n", codec_hw->name);
+        } else if (codecCtx->lowres) {
+            Debug(0, "VA-API not used with lowres=%d, decoding in software\n", codecCtx->lowres);
+        } else {
+            if (!vaapi_device_ctx) {
+                int err = av_hwdevice_ctx_create(&vaapi_device_ctx, AV_HWDEVICE_TYPE_VAAPI, vaapi_device, NULL, 0);
+                if (err < 0) {
+                    Debug(0, "Cannot open VA-API device %s (%s), using software decoding\n",
+                          vaapi_device ? vaapi_device : "(default)", av_err2str(err));
+                    use_vaapi = 0;
+                } else {
+                    Debug(1, "Opened VA-API device %s\n", vaapi_device ? vaapi_device : "(default)");
+                }
+            }
+            if (vaapi_device_ctx) {
+                codecCtx->hw_device_ctx = av_buffer_ref(vaapi_device_ctx);
+                if (!codecCtx->hw_device_ctx)
+                    Debug(0, "Cannot reference VA-API device, using software decoding\n");
+                vaapi_reported = 0;
+            }
+        }
+    }
 
  //       av_dict_set_int(&myoptions, "fastint", 1, 0);
  //       av_dict_set_int(&myoptions, "skip_alpha", 1, 0);
