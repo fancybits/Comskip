@@ -559,6 +559,8 @@ int                     use_cuvid = 0;
 int                     use_vdpau = 0;
 int                     use_dxva2 = 0;
 int                     use_qsv = 0;
+int                     use_vaapi = 0;
+const char*             vaapi_device = NULL;
 int						skip_B_frames = 0;
 int						lowres = 0;
 bool					live_tv = false;
@@ -8877,6 +8879,8 @@ FILE* LoadSettings(int argc, char ** argv)
     struct arg_lit*		cl_use_vdpau			= arg_lit0(NULL, "vdpau", "Use NVIDIA Video Decode and Presentation API (VDPAU), if available");
     struct arg_lit*		cl_use_dxva2			= arg_lit0(NULL, "dxva2", "Use DXVA2 Video Decode and Presentation API (DXVA2), if available");
     struct arg_lit*		cl_use_qsv				= arg_lit0(NULL, "qsv", "Use Intel Quick Sync Video acceleration (QSV), if available");
+    struct arg_lit*		cl_use_vaapi			= arg_lit0(NULL, "vaapi", "Use VA-API hardware decoding (Intel/AMD on Linux), falls back to software if unsupported");
+    struct arg_str*		cl_vaapi_device			= arg_str0(NULL, "vaapi-device", "<path>", "VA-API device to use, e.g. /dev/dri/renderD128 (implies --vaapi)");
     struct arg_lit*		cl_list_decoders		= arg_lit0(NULL, "decoders", "List all decoders and exit");
     struct arg_int*		cl_threads				= arg_int0(NULL, "threads", "<int>", "The number of threads to use");
     struct arg_int*		cl_verbose				= arg_intn("v", "verbose", NULL, 0, 1, "Verbose level");
@@ -8909,6 +8913,8 @@ FILE* LoadSettings(int argc, char ** argv)
         cl_use_vdpau,
         cl_use_dxva2,
         cl_use_qsv,
+        cl_use_vaapi,
+        cl_vaapi_device,
         cl_list_decoders,
         cl_threads,
         cl_pid,
@@ -9376,6 +9382,14 @@ FILE* LoadSettings(int argc, char ** argv)
     {
         printf("Enabling use_qsv\n");
         use_qsv = 1;
+    }
+
+    if (cl_use_vaapi->count || cl_vaapi_device->count)
+    {
+        printf("Enabling use_vaapi\n");
+        use_vaapi = 1;
+        if (cl_vaapi_device->count)
+            vaapi_device = cl_vaapi_device->sval[0];
     }
 
     if (cl_threads->count)
